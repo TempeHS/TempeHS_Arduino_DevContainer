@@ -1,0 +1,14 @@
+{
+    "board": "arduino:avr:uno",
+    "sketch": "1.testDebug/1.testDebug.ino",
+    "port": "COM3",
+    "output": "./build",
+    "programmer": "",
+    "prebuild": "",
+    "postbuild": "",
+    "verifyOnUpload": true,
+    "configuration": "Release",
+    "serial": {
+        "baudRate": 9600
+    }
+}
