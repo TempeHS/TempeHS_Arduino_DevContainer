@@ -78,35 +78,189 @@ Ask user to confirm:
 - **Categories**: Base Kit, Environmental, Biomedical, Motion/Space, Display, Actuators, Input, Electrical
 - **Full inventory**: `docs/resources/sensor-inventory.md`
 
-### **Key Sensor Categories**
+## Complete Sensor Catalog
 
-#### Base Kit (13 sensors) - Foundation
+### 🔍 **How to Use This Catalog**
 
-- button, rotary-potentiometer, led, buzzer
-- light-sensor, sound-sensor, temperature-humidity, air-pressure
-- ultrasonic-ranger, 3-axis-accelerometer, line-finder
-- oled-display, servo
+When a user asks about a specific sensor:
 
-#### Environmental (7 sensors)
+1. **Identify the sensor** from the catalog below
+2. **Direct to specific guide**: `docs/sensors/[folder-name]/README.md`
+3. **Verify connection type** (Digital/Analog/I2C/PWM) matches their setup
+4. **Reference port requirements** from the catalog entry
+5. **Check library requirements** and direct to `docs/libraries/index.md`
 
-- infrared-temperature, air-quality, water-sensor
-- gas-sensor-mq9, dust-sensor, flame-sensor, soil-moisture
+### ⭐ **Base Kit Sensors (Core Collection)**
 
-#### Biomedical (6 sensors)
+These 13 sensors form the standard classroom kit - prioritize these for beginner projects:
 
-- ear-clip-heart-rate, finger-heart-rate, gsr-sensor
-- 3-axis-digital-accelerometer-bma400, alcohol-sensor-mq3
-- **ardeeg-biosignal-shield** (EEG/EMG/ECG - advanced)
+| Sensor                     | Type          | Port   | Key Info                                                       | Guide Path                           |
+| -------------------------- | ------------- | ------ | -------------------------------------------------------------- | ------------------------------------ |
+| **Button**                 | Digital       | D2-D8  | Simple INPUT, digitalRead() HIGH/LOW                           | `docs/sensors/button/`               |
+| **Rotary Potentiometer**   | Analog        | A0-A3  | Variable resistance, analogRead() 0-16383 (R4)                 | `docs/sensors/rotary-potentiometer/` |
+| **Red LED**                | Digital/PWM   | D2-D11 | digitalWrite() or analogWrite() for dimming                    | `docs/sensors/led/`                  |
+| **Buzzer**                 | Digital Pulse | D2-D8  | tone() function for melodies                                   | `docs/sensors/buzzer/`               |
+| **Light Sensor**           | Analog        | A0-A3  | Photoresistor, measures ambient light 0-16383                  | `docs/sensors/light-sensor/`         |
+| **Sound Sensor**           | Analog        | A0-A3  | Microphone, measures sound intensity                           | `docs/sensors/sound-sensor/`         |
+| **Temperature & Humidity** | I2C           | I2C    | DHT library, reads temp (°C/°F) and humidity (%)               | `docs/sensors/temperature-humidity/` |
+| **Air Pressure**           | I2C           | I2C    | BMP280 library, reads pressure (Pa) and altitude               | `docs/sensors/air-pressure/`         |
+| **Ultrasonic Ranger**      | Digital       | D2-D8  | Distance measurement 3-400cm, library: Grove_Ultrasonic_Ranger | `docs/sensors/ultrasonic-ranger/`    |
+| **3-Axis Accelerometer**   | I2C           | I2C    | LIS3DHTR, measures acceleration X/Y/Z, tilt detection          | `docs/sensors/3-axis-accelerometer/` |
+| **Line Finder v1.1**       | Digital       | D2-D8  | IR reflectance, HIGH on white, LOW on black                    | `docs/sensors/line-finder/`          |
+| **OLED Display 0.96"**     | I2C           | I2C    | SSD1315, 128x64 pixels, U8g2 library                           | `docs/sensors/oled-display/`         |
+| **Servo Motor**            | Digital Pulse | D2-D11 | 0-180° rotation, Servo.h library, needs PWM pin                | `docs/sensors/servo/`                |
 
-#### Display Systems (4 sensors)
+### 🌡️ **Environmental Sensors**
 
-- 4-digit-display, led-bar-v2, led-matrix-8x8, lcd-16x2
+| Sensor                   | Type          | Port  | Key Info                                                             | Guide Path                           |
+| ------------------------ | ------------- | ----- | -------------------------------------------------------------------- | ------------------------------------ |
+| **Infrared Temperature** | Analog        | A0-A3 | Non-contact temp sensing, -10 to 100°C                               | `docs/sensors/infrared-temperature/` |
+| **Air Quality Sensor**   | Analog        | A0-A3 | Detects harmful gases, outputs voltage proportional to concentration | `docs/sensors/air-quality/`          |
+| **Water Sensor**         | Digital       | D2-D8 | Detects presence of water, HIGH when dry, LOW when wet               | `docs/sensors/water-sensor/`         |
+| **Gas Sensor (MQ9)**     | Analog        | A0-A3 | Detects CO and combustible gas, requires warm-up time                | `docs/sensors/gas-sensor-mq9/`       |
+| **Dust Sensor**          | Digital Pulse | D2-D8 | PM2.5/PM10 detection, uses pulse timing measurement                  | `docs/sensors/dust-sensor/`          |
+| **Flame Sensor**         | Digital       | D2-D8 | Infrared flame detection, 60° detection angle                        | `docs/sensors/flame-sensor/`         |
+| **Soil Moisture**        | Analog        | A0-A3 | Capacitive moisture, corrosion resistant, 0-16383 range              | `docs/sensors/soil-moisture/`        |
 
-#### Motion/Space (9 sensors)
+### 🎵 **Sound Sensors**
 
-- mini-pir-motion, adjustable-pir-motion, collision-sensor
-- time-of-flight-vl53l0x, 6-axis-accelerometer-gyroscope
-- 3-axis-compass, vibration-sensor
+| Sensor              | Type   | Port  | Key Info                                            | Guide Path                      |
+| ------------------- | ------ | ----- | --------------------------------------------------- | ------------------------------- |
+| **Loudness Sensor** | Analog | A0-A3 | Wide frequency range, measures sound pressure level | `docs/sensors/loudness-sensor/` |
+| **Sound Sensor** ⭐ | Analog | A0-A3 | Basic microphone, good for clap detection           | `docs/sensors/sound-sensor/`    |
+
+### 🌈 **Color and Light Sensors**
+
+| Sensor                  | Type    | Port  | Key Info                                           | Guide Path                          |
+| ----------------------- | ------- | ----- | -------------------------------------------------- | ----------------------------------- |
+| **I2C Color Sensor**    | I2C     | I2C   | RGB color detection, I2C address configurable      | `docs/sensors/i2c-color-sensor/`    |
+| **Light Sensor** ⭐     | Analog  | A0-A3 | Photoresistor, ambient light measurement           | `docs/sensors/light-sensor/`        |
+| **Line Finder** ⭐      | Digital | D2-D8 | IR reflectance, line following robots              | `docs/sensors/line-finder/`         |
+| **TCS34725 RGB Sensor** | I2C     | I2C   | High-precision RGB + clear light, TCS34725 library | `docs/sensors/tcs34725-rgb-sensor/` |
+
+### 🎮 **Physical Input Devices**
+
+| Sensor                        | Type    | Port  | Key Info                                                                                   | Guide Path                              |
+| ----------------------------- | ------- | ----- | ------------------------------------------------------------------------------------------ | --------------------------------------- |
+| **Button** ⭐                 | Digital | D2-D8 | Momentary switch, use INPUT_PULLUP mode                                                    | `docs/sensors/button/`                  |
+| **Rotary Potentiometer** ⭐   | Analog  | A0-A3 | 300° rotation, variable resistance 0-10kΩ                                                  | `docs/sensors/rotary-potentiometer/`    |
+| **Vibration Sensor**          | Digital | D2-D8 | SW-420, detects vibration/shock, adjustable sensitivity                                    | `docs/sensors/vibration-sensor/`        |
+| **Joystick**                  | Analog  | A0-A1 | 2-axis (X/Y) analog input, requires 2 analog ports                                         | `docs/sensors/joystick/`                |
+| **Gesture Sensor**            | I2C     | I2C   | PAJ7620U2, 9 gestures: up/down/left/right/forward/backward/clockwise/counterclockwise/wave | `docs/sensors/gesture/`                 |
+| **12-Channel Touch (MPR121)** | I2C     | I2C   | Capacitive touch, 12 independent channels, I2C address 0x5A/0x5B                           | `docs/sensors/12-channel-touch-mpr121/` |
+
+### 🚀 **Space and Movement Sensors**
+
+| Sensor                        | Type    | Port  | Key Info                                               | Guide Path                                     |
+| ----------------------------- | ------- | ----- | ------------------------------------------------------ | ---------------------------------------------- |
+| **Mini PIR Motion**           | Digital | D2-D8 | Passive infrared, 3m range, 120° angle                 | `docs/sensors/mini-pir-motion/`                |
+| **Adjustable PIR Motion**     | Digital | D2-D8 | Adjustable sensitivity and delay time, 7m range        | `docs/sensors/adjustable-pir-motion/`          |
+| **Ultrasonic Ranger** ⭐      | Digital | D2-D8 | HC-SR04 compatible, 3-400cm range, ±1cm accuracy       | `docs/sensors/ultrasonic-ranger/`              |
+| **3-Axis Accelerometer** ⭐   | I2C     | I2C   | LIS3DHTR, ±2/4/8/16g range, tilt/orientation detection | `docs/sensors/3-axis-accelerometer/`           |
+| **Time of Flight (VL53L0X)**  | I2C     | I2C   | Laser ranging, 30-1000mm, ±3% accuracy                 | `docs/sensors/time-of-flight-vl53l0x/`         |
+| **Thermal Camera (MLX90621)** | I2C     | I2C   | 16x4 IR array, -40 to 300°C, thermal imaging           | `docs/sensors/thermal-camera-mlx90621/`        |
+| **6-Axis Accel+Gyro**         | I2C     | I2C   | LSM6DS3, 3-axis accelerometer + 3-axis gyroscope       | `docs/sensors/6-axis-accelerometer-gyroscope/` |
+| **3-Axis Compass**            | I2C     | I2C   | HMC5883L, digital compass, heading 0-360°              | `docs/sensors/3-axis-compass/`                 |
+| **Collision Sensor**          | Digital | D2-D8 | Mechanical switch, detects physical collision          | `docs/sensors/collision-sensor/`               |
+
+### 🩺 **Biomedical Sensors**
+
+| Sensor                      | Type          | Port      | Key Info                                                 | Guide Path                                          | Safety Notes                                         |
+| --------------------------- | ------------- | --------- | -------------------------------------------------------- | --------------------------------------------------- | ---------------------------------------------------- |
+| **Ear-Clip Heart Rate**     | Digital Pulse | D2-D8     | Photoelectric, outputs pulse signal, requires processing | `docs/sensors/ear-clip-heart-rate/`                 | Non-invasive, educational use only                   |
+| **Finger Heart Rate**       | I2C           | I2C       | Optical HR sensor, I2C output, BPM calculation           | `docs/sensors/finger-heart-rate/`                   | Non-invasive, educational use only                   |
+| **GSR Sensor**              | Analog        | A0-A3     | Galvanic skin response, measures skin conductance        | `docs/sensors/gsr-sensor/`                          | Skin contact, educational use only                   |
+| **Step Counter (BMA400)**   | I2C           | I2C       | 3-axis accelerometer, built-in step counting algorithm   | `docs/sensors/3-axis-digital-accelerometer-bma400/` | Activity tracking                                    |
+| **Alcohol Sensor (MQ3)**    | Analog        | A0-A3     | Ethanol gas detection, requires 24-48h preheating        | `docs/sensors/alcohol-sensor-mq3/`                  | Breath alcohol detection                             |
+| **ardEEG Biosignal Shield** | SPI Shield    | R4 Shield | **ADVANCED**: EEG/EMG/ECG biosignal acquisition          | `docs/sensors/ardeeg-biosignal-shield/`             | ⚠️ **BATTERY POWER ONLY, NO USB DURING MEASUREMENT** |
+
+### 📺 **Output Devices (Displays)**
+
+| Device              | Type          | Port  | Key Info                                                | Guide Path                      |
+| ------------------- | ------------- | ----- | ------------------------------------------------------- | ------------------------------- |
+| **4-Digit Display** | Digital Pulse | D2-D8 | TM1637, 7-segment LED display, clock/counter projects   | `docs/sensors/4-digit-display/` |
+| **LED Bar v2.0**    | Digital Pulse | D2-D8 | 10 LEDs, bar graph visualization, MY9221 driver         | `docs/sensors/led-bar-v2/`      |
+| **LCD 16x2**        | I2C           | I2C   | Character display, 16 columns × 2 rows, rgb_lcd library | `docs/sensors/lcd-16x2/`        |
+| **OLED 0.96"** ⭐   | I2C           | I2C   | 128x64 monochrome, SSD1315, U8g2 library                | `docs/sensors/oled-display/`    |
+| **LED Matrix 8x8**  | I2C           | I2C   | 64 red LEDs, HT16K33 driver, animations/patterns        | `docs/sensors/led-matrix-8x8/`  |
+
+### 🔊 **Output Devices (Audio/Actuators)**
+
+| Device                     | Type          | Port   | Key Info                                                   | Guide Path                           |
+| -------------------------- | ------------- | ------ | ---------------------------------------------------------- | ------------------------------------ |
+| **Red LED** ⭐             | Digital/PWM   | D2-D11 | Basic LED, digitalWrite() or analogWrite()                 | `docs/sensors/led/`                  |
+| **Buzzer** ⭐              | Digital Pulse | D2-D8  | Piezo buzzer, tone() function, melodies                    | `docs/sensors/buzzer/`               |
+| **Speaker**                | Digital Pulse | D2-D8  | 8Ω speaker, amplifier included, louder than buzzer         | `docs/sensors/speaker/`              |
+| **Vibration Motor**        | Digital       | D2-D8  | Haptic feedback, ON/OFF control                            | `docs/sensors/vibration-motor/`      |
+| **Servo Motor** ⭐         | Digital Pulse | D2-D11 | 180° rotation, Servo.h library, requires PWM pin           | `docs/sensors/servo/`                |
+| **RGB LED Strip (WS2813)** | Digital       | D2-D8  | Addressable RGB LEDs, FastLED or Adafruit_NeoPixel library | `docs/sensors/rgb-led-strip-ws2813/` |
+| **LED Strip Driver**       | Digital/PWM   | D2-D11 | Controls non-addressable LED strips, PWM dimming           | `docs/sensors/led-strip-driver/`     |
+
+### ⚡ **Electrical Components and Interfaces**
+
+| Component              | Type    | Port  | Key Info                                                 | Guide Path                         | Safety Notes                                          |
+| ---------------------- | ------- | ----- | -------------------------------------------------------- | ---------------------------------- | ----------------------------------------------------- |
+| **Relay**              | Digital | D2-D8 | Switches AC/DC loads up to 250V 10A                      | `docs/sensors/relay/`              | ⚠️ High voltage - qualified installation only         |
+| **Electromagnet**      | Digital | D2-D8 | Requires MOSFET driver, flyback diode protection         | `docs/sensors/electromagnet/`      | ⚠️ High current draw, external power recommended      |
+| **Magnetic Switch**    | Digital | D2-D8 | Reed switch, detects magnetic field (door/window sensor) | `docs/sensors/magnetic-switch/`    |                                                       |
+| **Electricity Sensor** | Analog  | A0-A3 | CT sensor, measures AC current                           | `docs/sensors/electricity-sensor/` | ⚠️ **DANGER**: AC mains - qualified installation only |
+| **Screw Terminal**     | N/A     | Any   | Wire connection interface for custom sensors             | `docs/sensors/screw-terminal/`     |                                                       |
+| **Grove Connectors**   | N/A     | Any   | Standard 4-pin connector system documentation            | `docs/sensors/grove-connectors/`   |                                                       |
+| **I2C Hub (6-Port)**   | I2C     | I2C   | Expands single I2C port to 6 connections                 | `docs/sensors/i2c-hub/`            | Check I2C address conflicts                           |
+
+### 📋 **Quick Sensor Lookup by Use Case**
+
+**Distance Measurement:**
+
+- Short range (3-400cm): Ultrasonic Ranger ⭐
+- Long range (30-1000mm): Time of Flight VL53L0X
+- Thermal imaging: Thermal Camera MLX90621
+
+**Motion Detection:**
+
+- Human presence: Mini/Adjustable PIR Motion
+- Impact detection: Collision Sensor, Vibration Sensor
+- Gesture control: Gesture Sensor
+
+**Environmental Monitoring:**
+
+- Temperature: Temperature & Humidity ⭐, Infrared Temperature, Air Pressure ⭐
+- Air quality: Air Quality Sensor, Gas Sensor MQ9, Dust Sensor
+- Moisture: Water Sensor, Soil Moisture
+
+**User Input:**
+
+- Binary: Button ⭐
+- Variable: Rotary Potentiometer ⭐, Joystick
+- Touch: 12-Channel Touch MPR121
+- Gesture: Gesture Sensor
+
+**Display Output:**
+
+- Text: OLED ⭐, LCD 16x2
+- Numbers: 4-Digit Display
+- Graphics: OLED ⭐, LED Matrix 8x8
+- Bar graphs: LED Bar v2.0
+
+**Audio Output:**
+
+- Simple tones: Buzzer ⭐
+- Complex audio: Speaker
+- Haptic: Vibration Motor
+
+**Orientation/Movement:**
+
+- Tilt: 3-Axis Accelerometer ⭐
+- Rotation: 6-Axis Accel+Gyro
+- Direction: 3-Axis Compass
+- Steps: Step Counter BMA400
+
+**Biomedical Projects:**
+
+- Heart rate: Ear-Clip or Finger Heart Rate
+- Stress: GSR Sensor
+- Activity: Step Counter
+- Advanced biosignals: ardEEG Shield (EEG/EMG/ECG)
 
 ### **Integration Recipes** (`docs/integrations/`)
 
