@@ -1,0 +1,109 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Arduino Serial Terminal</title>
+    <link rel="stylesheet" href="node_modules/xterm/css/xterm.css" />
+    <link rel="stylesheet" href="/src/client/style.css" />
+  </head>
+  <body>
+    <div class="header">
+      <div class="branding">
+        <svg
+          width="32"
+          height="32"
+          viewBox="0 0 24 24"
+          fill="none"
+          xmlns="http://www.w3.org/2000/svg"
+        >
+          <path
+            d="M9 3V5H15V3H9ZM9 19V21H15V19H9ZM3 9H5V15H3V9ZM19 9H21V15H19V9Z"
+            fill="#00979D"
+          />
+          <path
+            fill-rule="evenodd"
+            clip-rule="evenodd"
+            d="M7 7H17V17H7V7ZM9 9H15V15H9V9Z"
+            fill="#00979D"
+          />
+        </svg>
+        <span>Arduino -<br />Codespaces<br />Bridge</span>
+      </div>
+
+      <div class="toolbar-group">
+        <!-- Top Bar: Connection & Upload -->
+        <div class="toolbar">
+          <button id="connectBtn">Connect Port</button>
+          <button id="disconnectBtn" disabled>Disconnect</button>
+          <div class="separator"></div>
+          <select id="boardType">
+            <option value="arduino:avr:uno">Arduino Uno</option>
+          </select>
+          <select id="sketchSelect">
+            <option value="">Select Sketch...</option>
+          </select>
+          <button id="compileBtn" disabled>Compile</button>
+          <button id="compileUploadBtn" disabled>Compile & Upload</button>
+        </div>
+
+        <!-- Bottom Bar: Serial Functions -->
+        <div class="toolbar">
+          <select id="baudRate">
+            <option value="300">300</option>
+            <option value="1200">1200</option>
+            <option value="2400">2400</option>
+            <option value="4800">4800</option>
+            <option value="9600" selected>9600</option>
+            <option value="19200">19200</option>
+            <option value="38400">38400</option>
+            <option value="57600">57600</option>
+            <option value="74880">74880</option>
+            <option value="115200">115200</option>
+            <option value="230400">230400</option>
+            <option value="250000">250000</option>
+          </select>
+          <div class="separator"></div>
+          <button id="toggleViewBtn">Switch to Plotter</button>
+          <div class="separator"></div>
+          <label
+            style="
+              display: flex;
+              align-items: center;
+              gap: 5px;
+              color: #d4d4d4;
+              font-size: 12px;
+            "
+          >
+            <input type="checkbox" id="timestampCheck" /> Show Timestamp
+          </label>
+          <button id="clearBtn">Clear Output</button>
+          <button id="downloadBtn">Download Output</button>
+        </div>
+      </div>
+    </div>
+
+    <div id="main-content">
+      <div id="terminal-container"></div>
+      <div id="plotter-container"></div>
+    </div>
+
+    <div class="input-bar">
+      <input
+        type="text"
+        id="serialInput"
+        placeholder="Type command..."
+        disabled
+      />
+      <select id="lineEnding">
+        <option value="none">No line ending</option>
+        <option value="nl">Newline</option>
+        <option value="cr">Carriage return</option>
+        <option value="nlcr" selected>Both NL & CR</option>
+      </select>
+      <button id="sendBtn" disabled>Send</button>
+    </div>
+
+    <script type="module" src="/src/client/main.js"></script>
+  </body>
+</html>

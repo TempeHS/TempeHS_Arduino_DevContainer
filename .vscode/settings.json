@@ -4,26 +4,27 @@
   "editor.formatOnSave": true,
   "editor.defaultFormatter": "esbenp.prettier-vscode",
   "editor.fontSize": 18,
-  "terminal.integrated.defaultProfile.windows": "Git Bash",
-  "window.restoreWindows": "preserve",
   "workbench.editorAssociations": {
     "*.md": "vscode.markdown.preview.editor"
   },
   "C_Cpp.formatting": "clangFormat",
-  "workbench.colorTheme": "Arduino IDE Dark",
+  "workbench.colorTheme": "Default Dark+",
   "workbench.iconTheme": "icons",
   "C_Cpp.updateChannel": "Insiders",
   "C_Cpp.intelliSenseEngine": "Default",
   "C_Cpp.default.intelliSenseMode": "gcc-x64",
-  "C_Cpp.default.configurationProvider": "vsciot-vscode.vscode-arduino",
-  "arduino.path": "",
-  "arduino.commandPath": "",
+  "C_Cpp.default.configurationProvider": "vscode-arduino.vscode-arduino-community",
   "arduino.logLevel": "info",
   "arduino.disableTestingOpen": false,
-  "arduino.skipHeaderProvider": false,
-  "arduino.defaultBaudRate": 9600,
-  "arduino.enableUSBDetection": true,
+  "arduino.skipHeaderProvider": true,
+  "arduino.defaultBaudRate": 115200,
+  "arduino.enableUSBDetection": false,
   "arduino.useArduinoCli": true,
+  "arduino.path": "/usr/local/bin",
+  "arduino.commandPath": "arduino-cli",
+  "arduino.sketchbookPath": "/home/vscode/Arduino",
+  "arduino.additionalUrls": [],
+  "http.proxySupport": "off",
   "arduino.allowPDEFiletype": false,
   "github.copilot.enable": {
     "python": false,
@@ -31,8 +32,6 @@
     "css": false,
     "SQL": false
   },
-  "chat.agent.enabled": false,
-  "github.copilot.chat.participant.alwaysInclude": [
-    ".github/copilot-instructions.md"
-  ]
+  "chat.agent.enabled": true,
+  "github.copilot.chat.participant.alwaysInclude": [""]
 }

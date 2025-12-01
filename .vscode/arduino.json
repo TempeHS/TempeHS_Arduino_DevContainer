@@ -1,14 +1,8 @@
 {
-    "board": "arduino:avr:uno",
-    "sketch": "1.testDebug/1.testDebug.ino",
-    "port": "COM3",
-    "output": "./build",
-    "programmer": "",
-    "prebuild": "",
-    "postbuild": "",
-    "verifyOnUpload": true,
-    "configuration": "Release",
-    "serial": {
-        "baudRate": 9600
-    }
+  "board": "arduino:avr:uno",
+  "port": "/tmp/arduinoUSB",
+  "output": "./build",
+  "programmer": "arduino",
+  "sketch": "demo_sketch/demo_sketch.ino",
+  "configuration": "monitor_speed=115200"
 }

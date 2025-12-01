@@ -1,0 +1,28 @@
+{
+  "boards": [
+    {
+      "name": "Arduino Uno",
+      "fqbn": "arduino:avr:uno"
+    },
+    {
+      "name": "Arduino Uno R4 WiFi",
+      "fqbn": "arduino:renesas_uno:unor4wifi"
+    },
+    {
+      "name": "Arduino Uno R4 Minima",
+      "fqbn": "arduino:renesas_uno:unor4minima"
+    },
+    {
+      "name": "Arduino Nano",
+      "fqbn": "arduino:avr:nano"
+    },
+    {
+      "name": "Arduino Mega or Mega 2560",
+      "fqbn": "arduino:avr:mega"
+    },
+    {
+      "name": "Arduino Leonardo",
+      "fqbn": "arduino:avr:leonardo"
+    }
+  ]
+}

@@ -1,0 +1,134 @@
+body {
+  margin: 0;
+  padding: 0;
+  background-color: #1e1e1e;
+  color: #d4d4d4;
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Oxygen,
+    Ubuntu, Cantarell, "Open Sans", "Helvetica Neue", sans-serif;
+  height: 100vh;
+  display: flex;
+  flex-direction: column;
+}
+
+.header {
+  display: flex;
+  background-color: #252526;
+  border-bottom: 1px solid #333;
+}
+
+.branding {
+  display: flex;
+  flex-direction: row;
+  align-items: center;
+  justify-content: center;
+  padding: 0 15px;
+  background-color: #1e1e1e;
+  border-right: 1px solid #333;
+  gap: 10px;
+}
+
+.branding span {
+  font-weight: 600;
+  font-size: 14px;
+  line-height: 1.2;
+  color: #00979d;
+  text-align: left;
+}
+
+.toolbar-group {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+}
+
+.toolbar {
+  padding: 8px 10px;
+  background-color: #252526;
+  display: flex;
+  gap: 10px;
+  align-items: center;
+  flex-wrap: wrap;
+}
+
+.toolbar:first-child {
+  border-bottom: 1px solid #333;
+}
+
+.input-bar {
+  padding: 10px;
+  background-color: #252526;
+  border-top: 1px solid #333;
+  display: flex;
+  gap: 10px;
+  align-items: center;
+}
+
+.input-bar input[type="text"] {
+  flex: 1;
+  background-color: #3c3c3c;
+  color: white;
+  border: 1px solid #3c3c3c;
+  padding: 6px;
+  border-radius: 2px;
+}
+
+.input-bar input[type="text"]:disabled {
+  background-color: #2d2d2d;
+  color: #888;
+}
+
+#main-content {
+  flex: 1;
+  position: relative;
+  overflow: hidden;
+}
+
+#terminal-container {
+  width: 100%;
+  height: 100%;
+  position: absolute;
+  top: 0;
+  left: 0;
+}
+
+#plotter-container {
+  width: 100%;
+  height: 100%;
+  position: absolute;
+  top: 0;
+  left: 0;
+  visibility: hidden;
+  background-color: #1e1e1e;
+}
+
+button {
+  background-color: #0e639c;
+  color: white;
+  border: none;
+  padding: 6px 12px;
+  border-radius: 2px;
+  cursor: pointer;
+}
+
+button:disabled {
+  background-color: #4d4d4d;
+  cursor: not-allowed;
+}
+
+button:hover:not(:disabled) {
+  background-color: #1177bb;
+}
+
+select {
+  background-color: #3c3c3c;
+  color: white;
+  border: 1px solid #3c3c3c;
+  padding: 5px;
+  border-radius: 2px;
+}
+
+.separator {
+  border-left: 1px solid #333;
+  height: 20px;
+  margin: 0 10px;
+}

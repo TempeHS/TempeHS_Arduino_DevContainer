@@ -4,7 +4,21 @@
 
   "features": {
     "ghcr.io/devcontainers/features/git:1": {},
-    "ghcr.io/devcontainers/features/github-cli:1": {}
+    "ghcr.io/devcontainers/features/github-cli:1": {},
+    "ghcr.io/devcontainers/features/node:1": {
+      "version": "lts"
+    }
+  },
+  "forwardPorts": [3000, 3500],
+  "portsAttributes": {
+    "3000": {
+      "label": "Arduino Bridge (Web IDE)",
+      "onAutoForward": "notify"
+    },
+    "3500": {
+      "label": "Arduino Bridge 2 (Connection Only)",
+      "onAutoForward": "notify"
+    }
   },
 
   "customizations": {
@@ -23,12 +37,13 @@
         "oderwat.indent-rainbow",
         "streetsidesoftware.code-spell-checker",
         "tal7aouy.icons",
-        "vsciot-vscode.vscode-arduino",
+        "vscode-arduino.vscode-arduino-community",
         "xaver.clang-format",
         "saeris.markdown-github-alerts",
         "GitHub.copilot",
         "usernamehw.errorlens",
         "mccarter.start-git-bash",
+        "debanshu2005.code-janitor",
         "mumarshahbaz.als"
       ],
       "settings": {
@@ -46,11 +61,11 @@
         "C_Cpp.updateChannel": "Insiders",
         "C_Cpp.intelliSenseEngine": "Default",
         "C_Cpp.default.intelliSenseMode": "gcc-x64",
-        "C_Cpp.default.configurationProvider": "vsciot-vscode.vscode-arduino",
+        "C_Cpp.default.configurationProvider": "vscode-arduino.vscode-arduino-community",
         "arduino.logLevel": "info",
         "arduino.disableTestingOpen": false,
         "arduino.skipHeaderProvider": false,
-        "arduino.defaultBaudRate": 9600,
+        "arduino.defaultBaudRate": 115200,
         "arduino.enableUSBDetection": true,
         "arduino.useArduinoCli": true,
         "arduino.allowPDEFiletype": false,
@@ -60,15 +75,15 @@
           "css": false,
           "SQL": false
         },
-        "chat.agent.enabled": false,
-        "github.copilot.chat.participant.alwaysInclude": [
-          ".github/copilot-instructions.md"
-        ]
+        "chat.agent.enabled": true,
+        "github.copilot.chat.participant.alwaysInclude": [""]
       }
     }
   },
 
   "postCreateCommand": "bash .devcontainer/setup.sh",
+  "postStartCommand": "bash .devcontainer/start-bridge.sh",
+  "postAttachCommand": "bash .devcontainer/start-bridge.sh",
 
   "remoteUser": "vscode"
 }

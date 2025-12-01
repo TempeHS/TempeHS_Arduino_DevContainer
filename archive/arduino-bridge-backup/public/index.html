@@ -1,0 +1,214 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Arduino Codespaces Bridge</title>
+    <style>
+      body {
+        font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto,
+          Oxygen, Ubuntu, Cantarell, "Open Sans", "Helvetica Neue", sans-serif;
+        background-color: #1e1e1e;
+        color: #cccccc;
+        padding: 20px;
+        display: flex;
+        flex-direction: column;
+        height: 100vh;
+        box-sizing: border-box;
+      }
+      h1 {
+        color: #ffffff;
+      }
+      .controls {
+        margin-bottom: 20px;
+        padding: 10px;
+        background-color: #252526;
+        border-radius: 5px;
+      }
+      .sketch-panel {
+        margin-bottom: 20px;
+        padding: 10px;
+        background-color: #252526;
+        border-radius: 5px;
+      }
+      .sketch-panel h2 {
+        margin-top: 0;
+        color: #ffffff;
+      }
+      .sketch-actions {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 10px;
+        align-items: center;
+        margin-bottom: 10px;
+      }
+      .compile-controls {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 10px;
+        align-items: center;
+        margin-bottom: 10px;
+      }
+      label {
+        font-size: 0.9em;
+        color: #cccccc;
+      }
+      select {
+        background-color: #1e1e1e;
+        color: #ffffff;
+        border: 1px solid #3c3c3c;
+        padding: 8px;
+        border-radius: 3px;
+        min-width: 240px;
+      }
+      .sketch-status {
+        font-size: 0.9em;
+        color: #cccccc;
+        margin: 0;
+      }
+      .compile-log {
+        background-color: #111;
+        color: #9cdcfe;
+        border: 1px solid #333;
+        border-radius: 4px;
+        padding: 10px;
+        max-height: 200px;
+        overflow-y: auto;
+        white-space: pre-wrap;
+        font-family: "Courier New", Courier, monospace;
+        font-size: 0.85em;
+      }
+      .button-link {
+        text-decoration: none;
+        display: inline-block;
+        background-color: #0e639c;
+        color: #fff;
+        padding: 8px 14px;
+        border-radius: 3px;
+      }
+      .button-link:hover {
+        background-color: #1177bb;
+      }
+      .hidden {
+        display: none;
+      }
+      button {
+        background-color: #0e639c;
+        color: white;
+        border: none;
+        padding: 10px 20px;
+        cursor: pointer;
+        font-size: 16px;
+        border-radius: 3px;
+      }
+      button:hover {
+        background-color: #1177bb;
+      }
+      button:disabled {
+        background-color: #4d4d4d;
+        cursor: not-allowed;
+      }
+      #status {
+        margin-left: 10px;
+        font-weight: bold;
+      }
+      #terminal {
+        flex-grow: 1;
+        background-color: #000000;
+        color: #00ff00;
+        font-family: "Courier New", Courier, monospace;
+        padding: 10px;
+        overflow-y: auto;
+        white-space: pre-wrap;
+        border: 1px solid #333;
+        border-radius: 5px;
+      }
+      .instructions {
+        margin-top: 10px;
+        font-size: 0.9em;
+        color: #aaaaaa;
+      }
+    </style>
+  </head>
+  <body>
+    <h1>Arduino Codespaces Bridge</h1>
+
+    <div class="controls">
+      <button id="connectBtn">Connect Arduino</button>
+      <span id="status">Disconnected</span>
+    </div>
+
+    <div class="sketch-panel">
+      <h2>Sketch Explorer</h2>
+      <div class="sketch-actions">
+        <button id="refreshSketches">Refresh Sketches</button>
+        <select id="sketchSelect" disabled>
+          <option>Loading sketch list...</option>
+        </select>
+      </div>
+      <div class="compile-controls">
+        <label for="boardSelect">Board:</label>
+        <select id="boardSelect"></select>
+        <button id="compileBtn" disabled>Compile Sketch</button>
+        <button id="uploadBtn" disabled>Compile &amp; Upload</button>
+        <a
+          id="downloadArtifact"
+          class="button-link hidden"
+          target="_blank"
+          rel="noopener"
+          >Download Artifact</a
+        >
+      </div>
+      <p id="sketchStatus" class="sketch-status">
+        Scanning workspace for .ino sketches...
+      </p>
+      <p id="compileStatus" class="sketch-status"></p>
+      <p id="uploadStatus" class="sketch-status"></p>
+      <pre id="compileLog" class="compile-log"></pre>
+    </div>
+
+    <div id="terminal">Waiting for connection...</div>
+
+    <div class="instructions">
+      <h3>Instructions:</h3>
+      <ol>
+        <li>Connect your Arduino to your local computer via USB.</li>
+        <li>Click "Connect Arduino" above.</li>
+        <li>
+          Select your device from the list. It usually appears as:
+          <ul>
+            <li>
+              <strong>Arduino Uno:</strong> <code>Arduino Uno</code>,
+              <code>USB Serial Device</code>
+            </li>
+            <li>
+              <strong>Others:</strong> <code>CP210x USB to UART Bridge</code>,
+              <code>FT232R USB UART</code>
+            </li>
+          </ul>
+        </li>
+        <li>
+          Once connected, the bridge will create <code>/tmp/arduinoUSB</code> in
+          your Codespace.
+        </li>
+        <li>
+          You can now configure the Arduino extension or Serial Monitor to use
+          <code>/tmp/arduinoUSB</code>.
+        </li>
+        <li>
+          <strong>Note:</strong> Ensure your Arduino sketch uses
+          <code>Serial.begin(115200);</code> for the best experience with this
+          bridge.
+        </li>
+        <li>
+          Use "Compile Sketch" to build and download the artifact, or "Compile
+          &amp; Upload" to send it directly to the connected board.
+        </li>
+      </ol>
+    </div>
+
+    <!-- <script src="/socket.io/socket.io.js"></script> -->
+    <script src="stk500.js"></script>
+    <script src="client.js"></script>
+  </body>
+</html>
