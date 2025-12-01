@@ -9,7 +9,7 @@
       "version": "lts"
     }
   },
-  "forwardPorts": [3000, 3500],
+  "forwardPorts": [3000],
   "portsAttributes": {
     "3000": {
       "label": "Arduino Bridge (Web IDE)",
