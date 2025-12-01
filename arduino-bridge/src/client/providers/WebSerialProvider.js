@@ -48,6 +48,11 @@ export class WebSerialProvider {
     writer.releaseLock();
   }
 
+  async setSignals(signals) {
+    if (!this.port) return;
+    await this.port.setSignals(signals);
+  }
+
   async readLoop() {
     while (this.port && this.port.readable && this.keepReading) {
       this.reader = this.port.readable.getReader();

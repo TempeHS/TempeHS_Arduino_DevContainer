@@ -5,7 +5,7 @@
   "type": "module",
   "scripts": {
     "dev": "vite",
-    "server": "node server.js",
+    "server": "node scripts/patch-provider.js && node server.js",
     "start": "npm run server & npm run dev",
     "build": "vite build",
     "preview": "vite preview"

@@ -149,7 +149,10 @@ export class STK500 {
     await this.connect();
 
     try {
+      if (progressCallback) progressCallback(0, "Syncing...");
       await this.sync(20);
+
+      if (progressCallback) progressCallback(0, "Entering Programming Mode...");
       await this.enterProgMode();
 
       let pageAddr = 0;
@@ -168,10 +171,11 @@ export class STK500 {
         pageAddr += chunk.length;
 
         if (progressCallback) {
-          progressCallback(Math.round((addr / totalBytes) * 100));
+          progressCallback(Math.round((addr / totalBytes) * 100), "Flashing");
         }
       }
 
+      if (progressCallback) progressCallback(100, "Finalizing...");
       await this.leaveProgMode();
       this.log("Flash complete!");
     } finally {

@@ -62,7 +62,34 @@
             <option value="115200">115200</option>
             <option value="230400">230400</option>
             <option value="250000">250000</option>
+            <option value="500000">500000</option>
+            <option value="921600">921600</option>
+            <option value="1000000">1000000</option>
+            <option value="2000000">2000000</option>
           </select>
+          <div class="separator"></div>
+          <label
+            style="
+              display: flex;
+              align-items: center;
+              gap: 5px;
+              color: #d4d4d4;
+              font-size: 12px;
+            "
+          >
+            <input type="checkbox" id="dtrCheck" /> DTR
+          </label>
+          <label
+            style="
+              display: flex;
+              align-items: center;
+              gap: 5px;
+              color: #d4d4d4;
+              font-size: 12px;
+            "
+          >
+            <input type="checkbox" id="rtsCheck" /> RTS
+          </label>
           <div class="separator"></div>
           <button id="toggleViewBtn">Switch to Plotter</button>
           <div class="separator"></div>
@@ -102,6 +129,72 @@
         <option value="nlcr" selected>Both NL & CR</option>
       </select>
       <button id="sendBtn" disabled>Send</button>
+    </div>
+
+    <!-- Bootloader Modal -->
+    <div
+      id="bootloaderModal"
+      style="
+        display: none;
+        position: fixed;
+        top: 0;
+        left: 0;
+        width: 100%;
+        height: 100%;
+        background: rgba(0, 0, 0, 0.7);
+        z-index: 1000;
+        justify-content: center;
+        align-items: center;
+      "
+    >
+      <div
+        style="
+          background: #252526;
+          padding: 20px;
+          border-radius: 5px;
+          border: 1px solid #007acc;
+          max-width: 400px;
+          text-align: center;
+          color: #cccccc;
+          font-family: 'Segoe UI', sans-serif;
+        "
+      >
+        <h3 style="margin-top: 0; color: #ffffff">⚠️ Device Reset Required</h3>
+        <p>The device is resetting into bootloader mode.</p>
+        <p>
+          Please wait for the LED to pulse (approx 2-3s), then click below to
+          select the new port.
+        </p>
+        <div style="margin-top: 20px">
+          <button
+            id="modalSelectPortBtn"
+            style="
+              background: #007acc;
+              color: white;
+              border: none;
+              padding: 8px 16px;
+              cursor: pointer;
+              border-radius: 2px;
+            "
+          >
+            Select Port & Continue
+          </button>
+          <button
+            id="modalCancelBtn"
+            style="
+              background: #3c3c3c;
+              color: white;
+              border: none;
+              padding: 8px 16px;
+              cursor: pointer;
+              margin-left: 10px;
+              border-radius: 2px;
+            "
+          >
+            Cancel
+          </button>
+        </div>
+      </div>
     </div>
 
     <script type="module" src="/src/client/main.js"></script>

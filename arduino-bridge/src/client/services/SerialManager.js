@@ -25,6 +25,10 @@ export class SerialManager {
     return await this.provider.write(data);
   }
 
+  async setSignals(signals) {
+    return await this.provider.setSignals(signals);
+  }
+
   handleData(chunk) {
     this.buffer += chunk;
     const lines = this.buffer.split("\n");

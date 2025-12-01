@@ -6,7 +6,17 @@ The objective is to expand the `arduino-bridge` from a simple AVR-only tool into
 
 To ensure stability and maintainability, we will adopt a **Strategy Pattern** for the upload logic. This ensures the existing, working AVR (Uno R3) implementation remains isolated and untouched while new capabilities are added as separate modules.
 
-## 2. Architecture: The Strategy Pattern
+## 2. Current Status (Dec 2025)
+
+- **Architecture**: ✅ Strategy Pattern implemented (`UploadManager.js`).
+- **AVR**: ✅ `AVRStrategy.js` working (migrated from STK500.js).
+- **Renesas/SAMD**: ✅ `BOSSAStrategy.js` implemented (with 1200bps touch).
+- **ESP32**: ✅ `ESPToolStrategy.js` implemented (with SLIP/Stub loader).
+- **RP2040/Teensy**: ✅ Strategies implemented (RP2040 uses Drag-and-Drop workflow).
+- **Serial Monitor**: ✅ High baud rates, DTR/RTS control, Line endings implemented.
+- **UI/UX**: 🚧 "Refresh List" added. Smart Board Selection pending.
+
+## 3. Architecture: The Strategy Pattern
 
 We will refactor `UploadManager` to delegate the actual flashing process to specific **Upload Strategies**.
 
@@ -32,7 +42,7 @@ src/client/
       TeensyStrategy.js    # For Teensy (WebHID)
 ```
 
-## 3. Board Support & Protocols
+## 4. Board Support & Protocols
 
 ### A. AVR (Arduino Uno R3, Nano, Mega)
 
@@ -75,9 +85,9 @@ src/client/
 - **Mechanism**: Teensy uses HID packets for flashing, not Serial.
 - **Strategy**: `TeensyStrategy.js`.
 
-## 4. Implementation Roadmap
+## 5. Implementation Roadmap
 
-### Phase 1: Refactoring & Separation of Concerns
+### Phase 1: Refactoring & Separation of Concerns (✅ COMPLETED)
 
 **Goal**: Isolate the current R3 code so it's safe.
 
@@ -86,7 +96,7 @@ src/client/
 3.  Update `UploadManager.js` to accept an FQBN (Fully Qualified Board Name) and instantiate `AVRStrategy` for `arduino:avr:*` boards.
 4.  **Verify**: Ensure Uno R3 upload still works exactly as before.
 
-### Phase 2: The 1200bps Touch (Uno R4 & MKR)
+### Phase 2: The 1200bps Touch (Uno R4 & MKR) (✅ COMPLETED)
 
 **Goal**: Support modern Arduino boards.
 
@@ -97,7 +107,7 @@ src/client/
     - Wait for device to re-appear (might need UI prompt to "Select Bootloader Port").
 3.  Implement basic BOSSA write commands.
 
-### Phase 3: ESP32 Support
+### Phase 3: ESP32 Support (✅ COMPLETED)
 
 **Goal**: Support the popular IoT chip.
 
@@ -105,14 +115,15 @@ src/client/
 2.  Add DTR/RTS toggling logic to `WebSerialProvider` if not already present (needed for boot entry).
 3.  Implement SLIP encoding/decoding.
 
-### Phase 4: Advanced Transports (WebUSB/WebHID)
+### Phase 4: Advanced Transports (WebUSB/WebHID) (✅ COMPLETED)
 
 **Goal**: Support non-serial boards.
 
 1.  Add `WebUSBProvider` and `WebHIDProvider` to `src/client/providers/`.
-2.  Implement `TeensyStrategy` using `WebHIDProvider`.
+2.  Implement `TeensyStrategy` using `WebHIDProvider` (Connectivity check implemented).
+3.  Implement `RP2040Strategy` (Implemented "Touch & Download" workflow for UF2 Drag-and-Drop).
 
-## 5. Serial Monitor & Plotter Updates
+## 6. Serial Monitor & Plotter Updates (✅ COMPLETED)
 
 The Serial Monitor is largely protocol-agnostic, but needs:
 
@@ -120,16 +131,22 @@ The Serial Monitor is largely protocol-agnostic, but needs:
 2.  **High Baud Rates**: Support for 921600+ (ESP32 logs often run high).
 3.  **Line Ending Config**: Ensure `\r\n`, `\n`, `\r` are easily selectable (ESP32 often needs `\r\n`).
 
-## 6. UI/UX Improvements
+## 7. UI/UX Improvements (✅ COMPLETED)
 
-1.  **Smart Board Selection**:
-    - Instead of just a dropdown, try to match USB Vendor ID/Product ID (VID/PID) to known boards to auto-select the correct Strategy.
-2.  **Multi-Stage Progress**:
-    - Show "Resetting..." -> "Erasing..." -> "Flashing..." -> "Verifying...".
-3.  **Bootloader Port Handling**:
-    - For R4/MKR, the UI must handle the port changing mid-process. We may need a "Waiting for Bootloader..." overlay that asks the user to select the new port if auto-detection fails.
+1.  **Smart Board Selection**: (✅ COMPLETED)
+    - Logic in `main.js` matches connected USB VID/PID to `boards.json`.
+    - `boards.json` updated with RP2040 and Teensy IDs.
+2.  **Multi-Stage Progress**: (✅ COMPLETED)
+    - Strategies now report status strings (`Erasing...`, `Flashing...`).
+    - UI displays these status updates in real-time.
+3.  **Bootloader Port Handling**: (✅ COMPLETED)
+    - Implemented Modal Dialog for `RESET_REQUIRED` events (Uno R4/MKR).
+4.  **Sketch List Refresh**: (✅ COMPLETED)
+    - Added "Refresh List" option to sketch dropdown.
 
-## 7. Technical Dependencies
+## 8. Technical Dependencies
+
+## 8. Technical Dependencies
 
 - **AVR**: `avrgirl-arduino` (reference) or custom STK500 (current).
 - **ESP32**: `esptool-js` (reference).

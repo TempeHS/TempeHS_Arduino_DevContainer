@@ -120,7 +120,8 @@ function slugify(value) {
 }
 
 function findArtifactFile(outputDir) {
-  const preferredExtensions = [".hex", ".bin", ".uf2"];
+  // Priority: UF2 (RP2040/Renesas) > BIN (ESP32) > HEX (AVR)
+  const preferredExtensions = [".uf2", ".bin", ".hex"];
   let entries = [];
   try {
     entries = fs.readdirSync(outputDir);
