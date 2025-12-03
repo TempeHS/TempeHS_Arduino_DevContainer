@@ -34,8 +34,6 @@ fi
 # Patch the Arduino extension (if installed) - this needs to run before extension loads
 # The patch fixes URL construction for Codespaces port forwarding
 echo "Attempting to patch Arduino extension for Codespaces compatibility..."
-if [ -d "arduino-bridge" ]; then
-    node arduino-bridge/scripts/patch-provider.js || echo "Patch skipped (extension not yet installed)"
-fi
+python3 scripts/patch-provider.py || echo "Patch skipped (extension not yet installed)"
 
 echo "Arduino development environment setup complete!"

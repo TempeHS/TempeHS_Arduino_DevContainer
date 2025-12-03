@@ -12,10 +12,11 @@ PID_FILE="/tmp/arduino-bridge.pid"
 echo "[$(date)] Starting Arduino bridge bootstrap script..."
 
 # Run the patch script first (before starting the bridge)
-if [[ -f "${BRIDGE_DIR}/scripts/patch-provider.js" ]]; then
+PATCH_SCRIPT="${ROOT_DIR}/scripts/patch-provider.py"
+if [[ -f "${PATCH_SCRIPT}" ]]; then
   echo "Checking Arduino extension patch status..."
   set +e
-  node "${BRIDGE_DIR}/scripts/patch-provider.js"
+  python3 "${PATCH_SCRIPT}"
   PATCH_EXIT=$?
   set -e
   if [[ $PATCH_EXIT -eq 2 ]]; then

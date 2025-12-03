@@ -7,7 +7,7 @@
     "dev": "vite",
     "server": "node server.js",
     "start": "npm run server & npm run dev",
-    "patch": "node scripts/patch-provider.js",
+    "patch": "python3 ../scripts/patch-provider.py",
     "build": "vite build",
     "preview": "vite preview"
   },
