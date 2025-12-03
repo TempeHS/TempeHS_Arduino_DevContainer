@@ -70,17 +70,45 @@ export class STK500 {
       try {
         this.log(`Sync attempt ${i + 1}...`);
         await this.send([0x30, 0x20]); // GET_SYNC, CRC_EOP
-        const resp = await this.receive(2, 200);
-        if (resp[0] === 0x14 && resp[1] === 0x10) {
-          this.log("Synced!");
-          return true;
-        } else {
-          this.log(
-            `Sync failed: Expected 14 10, got ${resp[0].toString(
-              16
-            )} ${resp[1].toString(16)}`
-          );
+
+        // Try to find 0x14 0x10 in the stream
+        // We read continuously for a short window to drain garbage and find the response
+        const start = Date.now();
+        let state = 0; // 0: waiting for 0x14, 1: waiting for 0x10
+
+        // We use a loop to read chunks as they come in
+        while (Date.now() - start < 200) {
+          // 200ms window
+          // Note: reader.read() blocks until data is available.
+          // If the board is silent, this might hang.
+          // But if we are here, we expect either garbage (sketch) or response (bootloader).
+          const { value, done } = await this.reader.read();
+          if (done) throw new Error("Port closed");
+
+          if (value) {
+            const hex = Array.from(value)
+              .map((b) => b.toString(16).padStart(2, "0").toUpperCase())
+              .join(" ");
+            this.log(`RX (sync): ${hex}`);
+
+            for (const byte of value) {
+              if (state === 0) {
+                if (byte === 0x14) state = 1;
+              } else if (state === 1) {
+                if (byte === 0x10) {
+                  this.log("Synced!");
+                  return true;
+                } else {
+                  // If we got 0x14 then something else, maybe the 0x14 was data.
+                  // Reset state. But check if this byte is 0x14 (start of new seq)
+                  if (byte === 0x14) state = 1;
+                  else state = 0;
+                }
+              }
+            }
+          }
         }
+        this.log("Sync timed out window");
       } catch (e) {
         this.log(`Sync attempt failed: ${e.message}`);
       }

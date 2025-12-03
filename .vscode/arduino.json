@@ -1,8 +1,8 @@
 {
-  "board": "arduino:avr:uno",
-  "port": "/tmp/arduinoUSB",
-  "output": "./build",
-  "programmer": "arduino",
-  "sketch": "demo_sketch/demo_sketch.ino",
-  "configuration": "monitor_speed=115200"
+    "board": "arduino:avr:uno",
+    "port": "/tmp/arduinoUSB",
+    "output": "./build",
+    "programmer": "arduino",
+    "sketch": "demo_blink/demo_blink.ino",
+    "configuration": "monitor_speed=115200"
 }

@@ -1,11 +1,52 @@
 # Arduino Bridge Development Progress & Memory
 
-**Date:** November 29, 2025
-**Status:** Paused (Waiting for official hardware for comparison)
+**Date:** January 2025
+**Status:** Active Development - BOSSA Upload Fix In Progress
 
 ## 🎯 Project Goal
 
 Enable flashing of Arduino hardware directly from a GitHub Codespace (or Dev Container) using the browser's Web Serial API, bypassing the need for local software installation.
+
+## 🔥 Latest Critical Fix (January 2025)
+
+### 1200bps Touch Reset - FIXED
+
+**Problem:** Arduino Uno R4 WiFi and MKR boards were NOT entering bootloader mode after the 1200bps touch. The device picker kept showing the same PID (0x1002 - sketch mode) instead of the bootloader PID (0x006D).
+
+**Root Cause:** Our implementation used incorrect DTR/RTS signals:
+
+```javascript
+// WRONG - Our old code:
+await port.setSignals({ dataTerminalReady: false, requestToSend: true });
+await new Promise((r) => setTimeout(r, 1200)); // wait THEN close
+```
+
+**Official Arduino Implementation (from arduino/go-serial-utils):**
+
+```go
+// CORRECT - Official Touch1200bps():
+p, err := serial.Open(port, &serial.Mode{BaudRate: 1200})
+p.SetDTR(false)  // DTR to FALSE only, no RTS manipulation
+p.Close()        // Close IMMEDIATELY triggers reset
+time.Sleep(500 * time.Millisecond)  // Wait AFTER close
+```
+
+**The Fix:**
+
+```javascript
+// CORRECT - New implementation:
+await port.open({ baudRate: 1200 });
+await port.setSignals({ dataTerminalReady: false }); // DTR=false only
+await port.close(); // Close immediately triggers reset
+await new Promise((r) => setTimeout(r, 500)); // Wait after close
+```
+
+**Key Insights:**
+
+1. Do NOT set RTS - official implementation only touches DTR
+2. DTR=false is the magic signal
+3. Port CLOSE triggers the reset (not the signal change)
+4. Wait 500ms AFTER close, not before
 
 ## 🏗️ Architecture Overview
 

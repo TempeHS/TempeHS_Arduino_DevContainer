@@ -67,22 +67,24 @@
       "pid": ["0x804d"]
     },
     {
-      "name": "ESP32 Dev Module",
-      "fqbn": "esp32:esp32:esp32",
-      "vid": ["0x10c4"],
-      "pid": ["0xea60"]
+      "name": "Arduino Nano ESP32",
+      "fqbn": "arduino:esp32:nano_nora",
+      "vid": ["0x2341"],
+      "pid": ["0x0070"]
     },
     {
       "name": "NodeMCU 1.0 (ESP-12E Module)",
       "fqbn": "esp8266:esp8266:nodemcuv2",
       "vid": [],
-      "pid": []
+      "pid": [],
+      "note": "ESP8266 core not installed"
     },
     {
       "name": "WeMos D1 R2 & mini",
       "fqbn": "esp8266:esp8266:d1_mini",
       "vid": ["0x04d9"],
-      "pid": ["0xb534"]
+      "pid": ["0xb534"],
+      "note": "ESP8266 core not installed"
     },
     {
       "name": "LinkNode D1",
@@ -98,21 +100,35 @@
     },
     {
       "name": "Raspberry Pi Pico",
-      "fqbn": "rp2040:rp2040:rpipico",
+      "fqbn": "arduino:mbed_rp2040:pico",
       "vid": ["0x2e8a"],
-      "pid": ["0x0003", "0x000a", "0x0005"]
+      "pid": ["0x0003", "0x000a", "0x0005"],
+      "uploadMode": "uf2-download",
+      "uploadInstructions": "Hold BOOTSEL while plugging in USB, then drag the .uf2 file to the RPI-RP2 drive."
+    },
+    {
+      "name": "Raspberry Pi Pico W",
+      "fqbn": "rp2040:rp2040:rpipicow",
+      "vid": ["0x2e8a"],
+      "pid": ["0x0003", "0x000a", "0x0005"],
+      "uploadMode": "uf2-download",
+      "uploadInstructions": "Hold BOOTSEL while plugging in USB, then drag the .uf2 file to the RPI-RP2 drive."
     },
     {
       "name": "Teensy 4.0",
       "fqbn": "teensy:avr:teensy40",
       "vid": ["0x16c0"],
-      "pid": ["0x0483", "0x0486"]
+      "pid": ["0x0483", "0x0486"],
+      "uploadMode": "uf2-download",
+      "uploadInstructions": "Use Teensy Loader application to flash the firmware."
     },
     {
       "name": "Teensy 4.1",
       "fqbn": "teensy:avr:teensy41",
       "vid": [],
-      "pid": []
+      "pid": [],
+      "uploadMode": "uf2-download",
+      "uploadInstructions": "Use Teensy Loader application to flash the firmware."
     },
     {
       "name": "Arduino Yún",

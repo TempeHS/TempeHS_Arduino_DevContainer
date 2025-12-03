@@ -20,6 +20,9 @@ arduino-cli core install arduino:mbed_rp2040   # Nano RP2040 Connect
 # Install clang-format for code formatting
 sudo apt-get install -y clang-format
 
+# Install Python dependencies for ESP32 toolchain (esptool)
+sudo apt-get install -y python3-pip python3-serial
+
 # Install dependencies for the Arduino Bridge
 if [ -d "arduino-bridge" ]; then
     echo "Installing Arduino Bridge dependencies..."

@@ -13,7 +13,22 @@ export class WebSerialProvider {
   async connect(baudRate = 9600, port = null) {
     try {
       this.port = port || (await navigator.serial.requestPort());
+
+      // Check if port is already open, close it first
+      if (this.port.readable || this.port.writable) {
+        console.log("[WebSerialProvider] Port already open, closing first...");
+        try {
+          await this.port.close();
+        } catch (e) {
+          console.warn("[WebSerialProvider] Error closing port:", e);
+        }
+        // Small delay to let the port fully close
+        await new Promise((r) => setTimeout(r, 100));
+      }
+
+      console.log(`[WebSerialProvider] Opening port at ${baudRate} baud...`);
       await this.port.open({ baudRate });
+      console.log("[WebSerialProvider] Port opened, starting read loop...");
 
       this.keepReading = true;
       this.readLoop();
@@ -54,12 +69,20 @@ export class WebSerialProvider {
   }
 
   async readLoop() {
+    console.log(
+      "[WebSerialProvider] readLoop started, keepReading:",
+      this.keepReading
+    );
+    console.log("[WebSerialProvider] port.readable:", this.port?.readable);
+
     while (this.port && this.port.readable && this.keepReading) {
+      console.log("[WebSerialProvider] Getting reader...");
       this.reader = this.port.readable.getReader();
       try {
         while (true) {
           const { value, done } = await this.reader.read();
           if (done) {
+            console.log("[WebSerialProvider] Reader done signal received");
             break;
           }
           if (value) {
@@ -68,11 +91,23 @@ export class WebSerialProvider {
           }
         }
       } catch (error) {
-        console.error("Error reading from serial port:", error);
+        console.error(
+          "[WebSerialProvider] Error reading from serial port:",
+          error
+        );
       } finally {
+        console.log("[WebSerialProvider] Releasing reader lock");
         this.reader.releaseLock();
       }
     }
+    console.log(
+      "[WebSerialProvider] readLoop exited. port:",
+      !!this.port,
+      "readable:",
+      this.port?.readable,
+      "keepReading:",
+      this.keepReading
+    );
   }
 
   on(event, callback) {

@@ -119,9 +119,15 @@ function slugify(value) {
   );
 }
 
-function findArtifactFile(outputDir) {
-  // Priority: UF2 (RP2040/Renesas) > BIN (ESP32) > HEX (AVR)
-  const preferredExtensions = [".uf2", ".bin", ".hex"];
+function findArtifactFile(outputDir, fqbn) {
+  // Determine preference based on FQBN
+  let preferredExtensions = [".uf2", ".bin", ".hex"];
+
+  if (fqbn && fqbn.includes(":avr:")) {
+    // AVR boards (Uno R3, Mega, Nano) need HEX for STK500
+    preferredExtensions = [".hex", ".bin", ".uf2"];
+  }
+
   let entries = [];
   try {
     entries = fs.readdirSync(outputDir);
@@ -161,10 +167,12 @@ function runArduinoCompile({ sketchPath, fqbn, outputDir }) {
 }
 
 async function prepareCompile(relativePath, fqbn) {
+  console.log(`[Prepare] Preparing compile for: ${relativePath} (${fqbn})`);
   if (!relativePath || !fqbn)
     return { ok: false, status: 400, error: "Missing path or fqbn" };
   const normalizedFqbn = String(fqbn).trim();
   const resolved = validateSketchPath(relativePath);
+  console.log(`[Prepare] Resolved path:`, resolved);
   if (!resolved)
     return { ok: false, status: 400, error: "Invalid sketch path" };
   if (!folderContainsIno(resolved.absolutePath))
@@ -203,7 +211,7 @@ async function prepareCompile(relativePath, fqbn) {
 
   let artifactPath;
   try {
-    artifactPath = findArtifactFile(outputDir);
+    artifactPath = findArtifactFile(outputDir, normalizedFqbn);
   } catch (err) {}
 
   if (!artifactPath)
@@ -260,6 +268,7 @@ app.get("/api/boards", (req, res) => {
 });
 
 app.post("/api/compile", async (req, res) => {
+  console.log("[API] Received compile request:", req.body);
   const { path: relativePath, fqbn } = req.body || {};
   const compileResult = await prepareCompile(relativePath, fqbn);
 
@@ -275,6 +284,114 @@ app.post("/api/compile", async (req, res) => {
     sketch: compileResult.resolved.normalized,
     artifact: compileResult.artifact,
     log: compileResult.log,
+  });
+});
+
+// --- Server-Side Upload Endpoint ---
+// Uses native bossac/arduino-cli for reliable uploads
+// Workaround for Web Serial limitations with R4 WiFi
+app.post("/api/upload", async (req, res) => {
+  console.log("[API] Received upload request:", req.body);
+  const { path: relativePath, fqbn, port } = req.body || {};
+
+  if (!relativePath || !fqbn || !port) {
+    return res.status(400).json({ error: "Missing path, fqbn, or port" });
+  }
+
+  // First compile
+  const compileResult = await prepareCompile(relativePath, fqbn);
+  if (!compileResult.ok) {
+    return res.status(compileResult.status).json({
+      error: compileResult.error,
+      log: compileResult.log,
+    });
+  }
+
+  // Then upload using arduino-cli
+  const artifactPath = path.join(
+    compileResult.outputDir,
+    compileResult.artifact.name
+  );
+
+  console.log(
+    `[Upload] Uploading ${artifactPath} to ${port} for board ${fqbn}`
+  );
+
+  const uploadResult = await new Promise((resolve) => {
+    const args = [
+      "upload",
+      "--fqbn",
+      fqbn,
+      "--port",
+      port,
+      "--input-file",
+      artifactPath,
+      "--verbose",
+    ];
+
+    console.log(`Running: arduino-cli ${args.join(" ")}`);
+    const child = spawn("arduino-cli", args, {
+      env: process.env,
+    });
+
+    let stdout = "";
+    let stderr = "";
+    child.stdout.on("data", (data) => {
+      const str = data.toString();
+      stdout += str;
+      console.log("[Upload stdout]", str);
+    });
+    child.stderr.on("data", (data) => {
+      const str = data.toString();
+      stderr += str;
+      console.log("[Upload stderr]", str);
+    });
+    child.on("close", (code) => resolve({ code, stdout, stderr }));
+    child.on("error", (err) => {
+      stderr += `\nSpawn error: ${err.message}`;
+      resolve({ code: 1, stdout, stderr });
+    });
+  });
+
+  const uploadLog = [
+    compileResult.log,
+    "--- UPLOAD ---",
+    uploadResult.stdout,
+    uploadResult.stderr,
+  ]
+    .filter(Boolean)
+    .join("\n")
+    .trim();
+
+  if (uploadResult.code !== 0) {
+    return res.status(500).json({
+      success: false,
+      error: "Upload failed",
+      log: uploadLog,
+    });
+  }
+
+  res.json({
+    success: true,
+    fqbn: compileResult.normalizedFqbn,
+    sketch: compileResult.resolved.normalized,
+    log: uploadLog,
+  });
+});
+
+// --- List Serial Ports ---
+app.get("/api/ports", (req, res) => {
+  exec("arduino-cli board list --format json", (error, stdout, stderr) => {
+    if (error) {
+      console.error(`exec error: ${error}`);
+      return res.status(500).json({ error: "Failed to list ports" });
+    }
+    try {
+      const data = JSON.parse(stdout);
+      res.json(data);
+    } catch (e) {
+      res.status(500).json({ error: "Failed to parse port list" });
+    }
   });
 });
 

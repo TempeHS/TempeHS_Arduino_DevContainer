@@ -32,6 +32,6 @@
     "css": false,
     "SQL": false
   },
-  "chat.agent.enabled": false,
+  "chat.agent.enabled": true,
   "github.copilot.chat.participant.alwaysInclude": [""]
 }

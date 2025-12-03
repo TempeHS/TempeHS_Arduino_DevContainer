@@ -8,6 +8,9 @@ const uploadManager = new UploadManager();
 const terminal = new TerminalUI("terminal-container");
 const plotter = new PlotterUI("plotter-container");
 
+// Track the last working baud rate for reconnection after upload
+let lastWorkingBaudRate = 115200;
+
 // UI Elements
 const connectBtn = document.getElementById("connectBtn");
 const disconnectBtn = document.getElementById("disconnectBtn");
@@ -111,12 +114,14 @@ async function loadBoards() {
     boardSelect.innerHTML = "";
     availableBoards = apiData.boards || [];
 
-    // Merge VID/PID from knownBoards into availableBoards for auto-detection
+    // Merge VID/PID and uploadMode from knownBoards into availableBoards
     availableBoards.forEach((board) => {
       const known = knownBoards.find((kb) => kb.fqbn === board.fqbn);
       if (known) {
         board.vid = known.vid;
         board.pid = known.pid;
+        board.uploadMode = known.uploadMode;
+        board.uploadInstructions = known.uploadInstructions;
       }
     });
 
@@ -182,14 +187,59 @@ async function loadSketches() {
 loadBoards();
 loadSketches();
 
+// Check if selected board uses UF2 download mode (no serial upload)
+function getBoardUploadMode() {
+  const fqbn = boardSelect.value;
+  const board = availableBoards.find((b) => b.fqbn === fqbn);
+  return board?.uploadMode || "serial";
+}
+
+function getBoardUploadInstructions() {
+  const fqbn = boardSelect.value;
+  const board = availableBoards.find((b) => b.fqbn === fqbn);
+  return board?.uploadInstructions || "";
+}
+
 // Enable/Disable Compile Buttons
 function updateCompileButtons() {
   const ready =
     sketchSelect.value &&
     boardSelect.value &&
     sketchSelect.value !== "__REFRESH__";
+
+  const uploadMode = getBoardUploadMode();
+
+  console.log(
+    "[updateCompileButtons] Board:",
+    boardSelect.value,
+    "UploadMode:",
+    uploadMode,
+    "Ready:",
+    ready
+  );
+
   compileBtn.disabled = !ready;
-  compileUploadBtn.disabled = !(ready && serialManager.provider.port);
+
+  if (uploadMode === "uf2-download") {
+    // UF2 boards: Change button text and enable without serial connection
+    compileUploadBtn.textContent = "Compile & Download (.uf2)";
+    compileUploadBtn.disabled = !ready;
+    console.log(
+      "[updateCompileButtons] UF2 mode - button enabled:",
+      !compileUploadBtn.disabled
+    );
+  } else {
+    // Serial upload boards: Require connection
+    compileUploadBtn.textContent = "Compile & Upload";
+    const hasPort = !!serialManager.provider.port;
+    compileUploadBtn.disabled = !(ready && hasPort);
+    console.log(
+      "[updateCompileButtons] Serial mode - hasPort:",
+      hasPort,
+      "button enabled:",
+      !compileUploadBtn.disabled
+    );
+  }
 }
 
 sketchSelect.addEventListener("change", async (e) => {
@@ -209,13 +259,50 @@ sketchSelect.addEventListener("change", async (e) => {
   }
   updateCompileButtons();
 });
-boardSelect.addEventListener("change", updateCompileButtons);
+
+boardSelect.addEventListener("change", () => {
+  updateCompileButtons();
+
+  // Auto-select default baud rate for this board (only if not connected)
+  if (!serialManager.provider.port) {
+    const defaultBaud = getDefaultBaudRate(boardSelect.value);
+    baudSelect.value = defaultBaud.toString();
+  }
+
+  // Show info message for UF2/download boards
+  const uploadMode = getBoardUploadMode();
+  if (uploadMode === "uf2-download") {
+    const board = availableBoards.find((b) => b.fqbn === boardSelect.value);
+    const boardName = board?.name || "This board";
+    terminal.write(
+      `\r\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\r\n`
+    );
+    terminal.write(`ℹ️  ${boardName} uses download mode.\r\n`);
+    terminal.write(
+      `   • Click "Compile & Download" to get the firmware file\r\n`
+    );
+    terminal.write(
+      `   • Flash the file to your board using the board's bootloader\r\n`
+    );
+    terminal.write(
+      `   • After flashing, use "Connect" to open the Serial Monitor\r\n`
+    );
+    terminal.write(
+      `━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\r\n`
+    );
+  }
+});
 
 // Compile Function
 async function compileSketch() {
   const sketchPath = sketchSelect.value;
   const fqbn = boardSelect.value;
 
+  console.log(
+    `[Client] Compiling sketch: '${sketchPath}' for board: '${fqbn}'`
+  );
+  terminal.write(`\r\n[Debug] Selected Sketch: ${sketchPath}\r\n`);
+  terminal.write(`[Debug] Selected Board: ${fqbn}\r\n`);
   terminal.write(`\r\nCompiling ${sketchPath} for ${fqbn}...\r\n`);
 
   try {
@@ -253,10 +340,14 @@ compileBtn.addEventListener("click", async () => {
 async function handleUpload(port, firmwareData, fqbn) {
   try {
     // 4. Re-open port for Flashing
-    try {
+    // Ensure any previous connection is fully closed first
+    if (serialManager.provider.port === port) {
+      await serialManager.disconnect();
+    }
+
+    // Reopen port at 115200 for AVR upload (DTR toggle needs open port)
+    if (!port.readable || !port.writable) {
       await port.open({ baudRate: 115200 });
-    } catch (e) {
-      console.log("Port open check:", e);
     }
 
     // 5. Flash
@@ -272,14 +363,30 @@ async function handleUpload(port, firmwareData, fqbn) {
       },
       fqbn
     );
-
     terminal.write("\r\nUpload Complete!\r\n");
 
-    // 6. Reconnect Serial Monitor
+    // 6. Reconnect Serial Monitor with auto-detect (new sketch may have different baud rate)
     try {
-      await port.close();
-      const baudRate = parseInt(baudSelect.value);
-      await serialManager.connect(baudRate, port);
+      // Close port if still open
+      if (port.readable || port.writable) {
+        await port.close();
+      }
+
+      // Auto-detect baud rate for the NEW sketch (it may be different from previous)
+      const detectedBaud = await autoDetectBaudRate(port, terminal);
+      lastWorkingBaudRate = detectedBaud;
+      baudSelect.value = detectedBaud.toString();
+
+      // Connect with detected baud rate
+      await serialManager.connect(detectedBaud, port);
+
+      // Success - update UI to connected state
+      connectBtn.disabled = true;
+      disconnectBtn.disabled = false;
+      updateCompileButtons();
+      serialInput.disabled = false;
+      sendBtn.disabled = false;
+      terminal.write("Serial monitor reconnected.\r\n");
     } catch (e) {
       console.error("Reconnect failed:", e);
       terminal.write("\r\nReconnect failed. Please connect manually.\r\n");
@@ -292,6 +399,102 @@ async function handleUpload(port, firmwareData, fqbn) {
       sendBtn.disabled = true;
     }
   } catch (error) {
+    // Handle bootloader port switch - device has reset and needs new port selection
+    if (error.code === "BOOTLOADER_PORT_NEEDED") {
+      terminal.write(`\r\n\x1b[1;36m${error.message}\x1b[0m\r\n`);
+      terminal.write(
+        `\r\n\x1b[1;33mThe Arduino has entered bootloader mode and appears as a NEW USB device.\x1b[0m\r\n`
+      );
+      terminal.write(
+        `\x1b[1;33mPlease select the bootloader port (may show as "Arduino" or different name).\x1b[0m\r\n`
+      );
+
+      // Show Modal for bootloader port selection
+      bootloaderModal.style.display = "flex";
+
+      const handleBootloaderSelect = async () => {
+        bootloaderModal.style.display = "none";
+        cleanupBootloader();
+
+        try {
+          // Request new port - filter for Arduino bootloader
+          const newPort = await navigator.serial.requestPort({
+            filters: [
+              { usbVendorId: 0x2341, usbProductId: 0x006d }, // R4 WiFi Bootloader
+              { usbVendorId: 0x2341, usbProductId: 0x0054 }, // MKR WiFi 1010 Bootloader
+              { usbVendorId: 0x2341, usbProductId: 0x0057 }, // Nano 33 IoT Bootloader
+              { usbVendorId: 0x2341 }, // Any Arduino device as fallback
+            ],
+          });
+
+          const info = newPort.getInfo();
+          terminal.write(
+            `\r\nSelected bootloader port (VID:${info.usbVendorId?.toString(
+              16
+            )}, PID:${info.usbProductId?.toString(16)})\r\n`
+          );
+          terminal.write("\r\nFlashing to bootloader...\r\n");
+
+          // Flash directly to bootloader port (skip prepare)
+          await uploadManager.flashToBootloader(
+            newPort,
+            firmwareData,
+            (progress, status) => {
+              if (status) {
+                terminal.write(`\r${status}: ${progress}%`);
+              } else {
+                terminal.write(`\rFlashing: ${progress}%`);
+              }
+            },
+            fqbn
+          );
+          terminal.write("\r\nUpload Complete!\r\n");
+
+          // Try to reconnect to the original port (device reboots after flash)
+          try {
+            await new Promise((r) => setTimeout(r, 2000)); // Wait for reboot
+            const baudRate = parseInt(baudSelect.value);
+            await serialManager.connect(baudRate, port);
+          } catch (e) {
+            terminal.write(
+              "\r\nDevice rebooted. Please reconnect manually.\r\n"
+            );
+            connectBtn.disabled = false;
+            disconnectBtn.disabled = true;
+            baudSelect.disabled = false;
+            updateCompileButtons();
+          }
+        } catch (e) {
+          console.error("Bootloader flash failed:", e);
+          terminal.write(`\r\nBootloader flash failed: ${e.message}\r\n`);
+          connectBtn.disabled = false;
+          disconnectBtn.disabled = true;
+          baudSelect.disabled = false;
+          updateCompileButtons();
+        }
+      };
+
+      const handleBootloaderCancel = () => {
+        bootloaderModal.style.display = "none";
+        cleanupBootloader();
+        terminal.write("\r\nUpload Cancelled.\r\n");
+        connectBtn.disabled = false;
+        disconnectBtn.disabled = true;
+        baudSelect.disabled = false;
+        updateCompileButtons();
+      };
+
+      const cleanupBootloader = () => {
+        modalSelectPortBtn.removeEventListener("click", handleBootloaderSelect);
+        modalCancelBtn.removeEventListener("click", handleBootloaderCancel);
+      };
+
+      modalSelectPortBtn.addEventListener("click", handleBootloaderSelect);
+      modalCancelBtn.addEventListener("click", handleBootloaderCancel);
+
+      return;
+    }
+
     if (error.code === "RESET_REQUIRED") {
       terminal.write(
         `\r\n\x1b[1;33mAction Required: ${error.message}\x1b[0m\r\n`
@@ -374,17 +577,85 @@ async function handleUpload(port, firmwareData, fqbn) {
 
 // Compile & Upload Button Handler
 compileUploadBtn.addEventListener("click", async () => {
+  const fqbn = boardSelect.value;
+  const sketchPath = sketchSelect.value;
+  const uploadMode = getBoardUploadMode();
+
+  // UF2 DOWNLOAD MODE (Pico, Teensy, etc.)
+  if (uploadMode === "uf2-download") {
+    terminal.write(`\r\n[UF2 Download Mode] Board: ${fqbn}\r\n`);
+
+    // 1. Compile
+    const artifactUrl = await compileSketch();
+    if (!artifactUrl) return;
+
+    terminal.write(`\r\n[Debug] Artifact URL: ${artifactUrl}\r\n`);
+
+    // 2. Download the firmware file
+    try {
+      terminal.write("Preparing firmware for download...\r\n");
+      const response = await fetch(artifactUrl);
+      if (!response.ok)
+        throw new Error("Failed to download firmware from server");
+
+      const firmwareBlob = await response.blob();
+
+      // Determine filename from URL or generate one
+      const urlParts = artifactUrl.split("/");
+      let filename = urlParts[urlParts.length - 1];
+
+      // Ensure proper extension based on board type
+      if (fqbn.includes("rp2040") || fqbn.includes("rpipico")) {
+        if (!filename.endsWith(".uf2")) {
+          filename = sketchPath.split("/").pop().replace(".ino", "") + ".uf2";
+        }
+      } else if (fqbn.includes("teensy")) {
+        if (!filename.endsWith(".hex")) {
+          filename = sketchPath.split("/").pop().replace(".ino", "") + ".hex";
+        }
+      }
+
+      // Create download link and trigger browser download
+      const downloadUrl = URL.createObjectURL(firmwareBlob);
+      const a = document.createElement("a");
+      a.href = downloadUrl;
+      a.download = filename;
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      URL.revokeObjectURL(downloadUrl);
+
+      terminal.write(
+        `\r\n\x1b[1;32mFirmware downloaded: ${filename}\x1b[0m\r\n`
+      );
+
+      // Show upload instructions
+      const instructions = getBoardUploadInstructions();
+      if (instructions) {
+        terminal.write(`\r\n\x1b[1;33mNext Steps:\x1b[0m ${instructions}\r\n`);
+      }
+    } catch (error) {
+      terminal.write(`\r\n\x1b[1;31mError: ${error.message}\x1b[0m\r\n`);
+    }
+
+    return;
+  }
+
+  // SERIAL UPLOAD MODE (AVR, BOSSA, ESP32, etc.)
   if (!serialManager.provider.port) return;
 
   // Capture port immediately to ensure we have it even if disconnected during compile
   const savedPort = serialManager.provider.port;
 
-  const fqbn = boardSelect.value;
-  // Alert removed as we now support more boards via Strategy Pattern
+  // All uploads use client-side Web Serial (BOSSA, AVR, ESP32, etc.)
+  // Note: Server-side upload was attempted but doesn't work in GitHub Codespaces
+  // since the Arduino is connected to the user's browser, not the server.
 
   // 1. Compile
   const artifactUrl = await compileSketch();
   if (!artifactUrl) return;
+
+  terminal.write(`\r\n[Debug] Artifact URL: ${artifactUrl}\r\n`);
 
   // 2. Download Firmware
   let firmwareData;
@@ -395,7 +666,6 @@ compileUploadBtn.addEventListener("click", async () => {
     firmwareData = await response.arrayBuffer();
 
     // 3. Disconnect Serial Monitor
-    // Check if still connected before disconnecting, to avoid double-close issues if user disconnected
     if (serialManager.provider.port) {
       await serialManager.disconnect();
     }
@@ -407,35 +677,126 @@ compileUploadBtn.addEventListener("click", async () => {
   }
 });
 
+// Get default baud rate for a board (fallback when no auto-detect)
+function getDefaultBaudRate(fqbn) {
+  // ESP32 boards often use 115200
+  if (fqbn && fqbn.includes("esp32")) return 115200;
+  // Most Arduino boards default to 9600
+  return 9600;
+}
+
+// Common baud rates to try (most common first, then low to high)
+const BAUD_RATES_TO_TRY = [
+  115200, 9600, 19200, 57600, 300, 1200, 2400, 4800, 14400, 28800, 38400, 56000,
+  76800, 128000, 230400, 250000,
+];
+
+// Auto-detect baud rate by checking if received data is readable ASCII
+async function autoDetectBaudRate(port, terminal) {
+  terminal.write("\r\nAuto-detecting baud rate...\r\n");
+
+  for (const baudRate of BAUD_RATES_TO_TRY) {
+    try {
+      // Open port at this baud rate
+      await port.open({ baudRate });
+
+      // Wait for Arduino to reset and bootloader to finish (triggered by DTR on open)
+      await new Promise((resolve) => setTimeout(resolve, 1500));
+
+      // Collect data for a short time
+      const reader = port.readable.getReader();
+      let receivedData = [];
+      let dataReceived = false;
+
+      // Set a timeout for data collection (1.5 seconds to catch slow serial prints)
+      const timeoutPromise = new Promise((resolve) =>
+        setTimeout(resolve, 1500)
+      );
+
+      const readPromise = (async () => {
+        try {
+          while (true) {
+            const { value, done } = await reader.read();
+            if (done) break;
+            if (value && value.length > 0) {
+              dataReceived = true;
+              receivedData.push(...value);
+              // Once we have enough data to analyze, stop
+              if (receivedData.length >= 20) break;
+            }
+          }
+        } catch (e) {
+          // Read interrupted, that's fine
+        }
+      })();
+
+      // Wait for either timeout or enough data
+      await Promise.race([timeoutPromise, readPromise]);
+
+      // Cancel the reader
+      try {
+        await reader.cancel();
+      } catch (e) {}
+      reader.releaseLock();
+
+      // Close port
+      await port.close();
+
+      // If no data received at this baud rate, try next
+      if (!dataReceived || receivedData.length === 0) {
+        terminal.write(`  ${baudRate}: no data\r\n`);
+        continue;
+      }
+
+      // Check if data is readable ASCII (printable chars, newlines, etc.)
+      const printableCount = receivedData.filter(
+        (byte) =>
+          (byte >= 32 && byte <= 126) || // Printable ASCII
+          byte === 10 ||
+          byte === 13 ||
+          byte === 9 // LF, CR, TAB
+      ).length;
+
+      const readableRatio = printableCount / receivedData.length;
+
+      terminal.write(
+        `  ${baudRate}: ${Math.round(readableRatio * 100)}% readable (${
+          receivedData.length
+        } bytes)\r\n`
+      );
+
+      // If more than 80% is readable ASCII, this is likely the correct baud rate
+      if (readableRatio >= 0.8) {
+        terminal.write(`\r\n✓ Detected baud rate: ${baudRate}\r\n`);
+        return baudRate;
+      }
+    } catch (e) {
+      // Port error, try to close and continue
+      try {
+        await port.close();
+      } catch (e2) {}
+      continue;
+    }
+  }
+
+  // No good match found, return default
+  terminal.write("\r\nCould not detect baud rate, using 9600\r\n");
+  return 9600;
+}
+
 // Connect Button Handler
 connectBtn.addEventListener("click", async () => {
   try {
-    const baudRate = parseInt(baudSelect.value);
-    await serialManager.connect(baudRate);
+    // First, request the port (user selects from dialog)
+    const port = await navigator.serial.requestPort();
 
-    // Auto-select board based on VID/PID
-    const portInfo = serialManager.provider.port.getInfo();
+    // Get port info for board detection
+    const portInfo = port.getInfo();
+    let detectedBoard = null;
+
     if (portInfo.usbVendorId && portInfo.usbProductId) {
-      const vid =
-        "0x" + portInfo.usbVendorId.toString(16).toLowerCase().padStart(4, "0");
-      const pid =
-        "0x" +
-        portInfo.usbProductId.toString(16).toLowerCase().padStart(4, "0");
-
-      // Also try without padding if json has short format, but json has 0x0043 etc.
-      // My json has 0x0043. toString(16) of 0x43 is "43". padStart(4,'0') -> "0043".
-      // Wait, 0x2341 is 9025. toString(16) is "2341".
-      // 0x0043 is 67. toString(16) is "43".
-      // So I should pad to 4 chars if I want to match "0x0043".
-      // But wait, "0x" + "43" is "0x43". My json has "0x0043".
-      // I should normalize both sides or ensure my json matches.
-      // Let's normalize to just hex string without 0x for comparison?
-      // Or just fix the logic here.
-
-      // Let's try to match loosely.
-      const matchedBoard = availableBoards.find((b) => {
+      detectedBoard = availableBoards.find((b) => {
         if (!b.vid || !b.pid) return false;
-        // Check if any VID matches
         const vidMatch = b.vid.some(
           (v) => parseInt(v) === portInfo.usbVendorId
         );
@@ -445,16 +806,23 @@ connectBtn.addEventListener("click", async () => {
         return vidMatch && pidMatch;
       });
 
-      if (matchedBoard) {
-        boardSelect.value = matchedBoard.fqbn;
-        terminal.write(`\r\nAuto-detected board: ${matchedBoard.name}\r\n`);
+      if (detectedBoard) {
+        boardSelect.value = detectedBoard.fqbn;
+        terminal.write(`\r\nAuto-detected board: ${detectedBoard.name}\r\n`);
         updateCompileButtons();
       }
     }
 
+    // Try to auto-detect baud rate by sampling data
+    const detectedBaud = await autoDetectBaudRate(port, terminal);
+    baudSelect.value = detectedBaud.toString();
+    lastWorkingBaudRate = detectedBaud; // Save for reconnection after upload
+
+    // Now connect with SerialManager using the detected baud rate and selected port
+    await serialManager.connect(detectedBaud, port);
+
     connectBtn.disabled = true;
     disconnectBtn.disabled = false;
-    // baudSelect.disabled = true; // Allow changing baud rate while connected
     updateCompileButtons();
 
     // Enable Input
@@ -490,9 +858,13 @@ disconnectBtn.addEventListener("click", async () => {
 
 // Baud Rate Change Handler
 baudSelect.addEventListener("change", async () => {
+  const newBaudRate = parseInt(baudSelect.value);
+
+  // Always track the selected baud rate for reconnection
+  lastWorkingBaudRate = newBaudRate;
+
   // If connected, reconnect with new baud rate
   if (serialManager.provider.port) {
-    const newBaudRate = parseInt(baudSelect.value);
     const savedPort = serialManager.provider.port;
 
     terminal.write(`\r\nChanging baud rate to ${newBaudRate}...\r\n`);
