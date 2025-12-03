@@ -11,6 +11,25 @@ PID_FILE="/tmp/arduino-bridge.pid"
 
 echo "[$(date)] Starting Arduino bridge bootstrap script..."
 
+# Run the patch script first (before starting the bridge)
+if [[ -f "${BRIDGE_DIR}/scripts/patch-provider.js" ]]; then
+  echo "Checking Arduino extension patch status..."
+  set +e
+  node "${BRIDGE_DIR}/scripts/patch-provider.js"
+  PATCH_EXIT=$?
+  set -e
+  if [[ $PATCH_EXIT -eq 2 ]]; then
+    echo ""
+    echo "=========================================="
+    echo "⚠️  RELOAD VS CODE WINDOW NOW!"
+    echo "   Press Ctrl+Shift+P → 'Developer: Reload Window'"
+    echo "   or run: code --reload-window"
+    echo "   Board Manager will not work until you reload."
+    echo "=========================================="
+    echo ""
+  fi
+fi
+
 if [[ ! -d "${BRIDGE_DIR}" ]]; then
   echo "Arduino bridge directory not found at ${BRIDGE_DIR}; skipping start."
   exit 0

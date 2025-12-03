@@ -28,19 +28,14 @@ if [ -d "arduino-bridge" ]; then
     echo "Installing Arduino Bridge dependencies..."
     cd arduino-bridge
     npm install
-
-    echo "Starting Arduino Bridge server..."
-    nohup npm start > /tmp/arduino-bridge.log 2>&1 &
-    BRIDGE_PID=$!
-    echo "Arduino Bridge running in background (PID: ${BRIDGE_PID}). Logs: /tmp/arduino-bridge.log"
     cd ..
+fi
 
-    if [ -n "$BROWSER" ]; then
-        echo "Opening Arduino Bridge UI in browser..."
-        "$BROWSER" "http://127.0.0.1:3000" >/dev/null 2>&1 &
-    else
-        echo "BROWSER variable not set; open http://127.0.0.1:3000 manually via the Ports tab."
-    fi
+# Patch the Arduino extension (if installed) - this needs to run before extension loads
+# The patch fixes URL construction for Codespaces port forwarding
+echo "Attempting to patch Arduino extension for Codespaces compatibility..."
+if [ -d "arduino-bridge" ]; then
+    node arduino-bridge/scripts/patch-provider.js || echo "Patch skipped (extension not yet installed)"
 fi
 
 echo "Arduino development environment setup complete!"

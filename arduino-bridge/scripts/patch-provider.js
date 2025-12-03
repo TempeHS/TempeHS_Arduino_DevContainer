@@ -56,12 +56,18 @@ try {
     const newContent = content.replace(oldLine, newLine);
     fs.writeFileSync(targetFile, newContent, "utf8");
     console.log("Successfully patched arduinoContentProvider.js");
+    console.log(
+      "⚠️  IMPORTANT: Reload VS Code window for patch to take effect!"
+    );
+    console.log("   Press Ctrl+Shift+P → 'Developer: Reload Window'");
+    process.exit(2); // Exit code 2 = patched, reload needed
   } else if (
     content.includes(
       'var baseUrl = "${(yield vscode.env.asExternalUri(this._webserver.getEndpointUri(""))).toString()}";'
     )
   ) {
     console.log("arduinoContentProvider.js is already patched.");
+    process.exit(0); // Exit code 0 = already patched, no action needed
   } else {
     console.log(
       "Could not find target string to replace in arduinoContentProvider.js. It might have changed in a new version."
@@ -75,6 +81,7 @@ try {
       console.log("Relevant section in file:");
       console.log(content.substring(startIndex, endIndex + endMarker.length));
     }
+    process.exit(1); // Exit code 1 = could not patch
   }
 } catch (err) {
   console.error("Error patching file:", err);
