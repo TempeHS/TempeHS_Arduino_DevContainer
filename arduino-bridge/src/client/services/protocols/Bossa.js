@@ -264,52 +264,56 @@ export class Bossa {
   }
 
   /**
-   * Aggressive handshake with "proceed anyway" option
+   * BOSSA Handshake - EXACTLY as captured from Arduino IDE
+   *
+   * From Wireshark capture (R4.pcapng):
+   *   Frame 2681: TX "N#" (Normal/Binary mode)
+   *   Frame 2683: RX "\n\r" (ACK)
+   *   Frame 2685: TX "V#" (Get Version)
+   *   Frame 2687: RX "Arduino Bootloader..."
+   *   Frame 2711: TX "I#" (Device Info - optional)
+   *
+   * CRITICAL: NO auto-baud preambles (0x80), NO signal toggling - just send commands!
+   *
    * @param {Object} options
-   * @param {boolean} options.proceedOnFailure - If true, return fake version on timeout ("suck it and see")
+   * @param {boolean} options.proceedOnFailure - If true, return fake version on timeout
    * @param {number} options.attempts - Number of retry attempts
    */
   async hello(options = {}) {
-    const { proceedOnFailure = false, attempts = 2 } = options;
-    console.log(`[Bossa] Handshake... (proceedOnFailure=${proceedOnFailure})`);
+    const { proceedOnFailure = false, attempts = 3 } = options;
+    console.log("[Bossa] === HANDSHAKE (exact Wireshark sequence) ===");
     let lastError = null;
 
-    for (let attempt = 0; attempt < attempts; attempt++) {
+    for (let attempt = 1; attempt <= attempts; attempt++) {
       try {
-        if (attempt === 1) {
-          console.log("[Bossa] Retrying handshake with auto-baud sync...");
-          await this.autoBaudSync();
-        } else if (attempt > 1) {
-          // Extended attempts: try different sync patterns
-          console.log(
-            `[Bossa] Attempt ${attempt + 1}: Trying extended sync...`
-          );
-          await this.extendedSync(attempt);
-        }
+        console.log(`[Bossa] Attempt ${attempt}/${attempts}`);
 
-        // Set Normal Mode (binary)
+        // Step 1: N# (Normal/Binary mode)
         await this.writeCommand("N#");
 
+        // Wait for ACK (\n\r)
         try {
           const ackBytes = await this.readUntilTerminator({
             terminators: [0x0a, 0x0d, 0x3e],
-            timeout: 600,
+            timeout: 1000,
             maxBytes: 16,
           });
-          const ackText = this.bytesToPrintable(ackBytes) || "<non-printable>";
-          console.log(`[Bossa] N# Ack: ${ackText}`);
+          const ackText = this.bytesToPrintable(ackBytes) || "\\n\\r";
+          console.log(`[Bossa] N# ACK received: ${ackText}`);
         } catch (ackErr) {
-          console.log(`[Bossa] No Ack for N# (${ackErr.message}) - continuing`);
+          // N# ACK is optional on some bootloaders, continue to V#
+          console.log(`[Bossa] N# ACK not received, continuing to V#`);
         }
 
-        // Drain any prompt markers that may have arrived with the ack
-        await this.flush(100);
+        // Small delay between commands
+        await this.delay(50);
 
-        // Get Version
+        // Step 2: V# (Get Version)
         await this.writeCommand("V#");
+
         const versionBytes = await this.readUntilTerminator({
           terminators: [0x0a, 0x0d, 0x3e],
-          timeout: 3000,
+          timeout: 2000,
           maxBytes: 256,
         });
         const version = this.bytesToPrintable(versionBytes);
@@ -318,42 +322,53 @@ export class Bossa {
           throw new Error("Empty version response");
         }
 
-        console.log(`[Bossa] Device Version: ${version}`);
+        console.log(`[Bossa] Version: ${version}`);
+
+        // Step 3: I# (Device Info - optional, as seen in capture)
+        try {
+          await this.delay(50);
+          await this.writeCommand("I#");
+          const infoBytes = await this.readUntilTerminator({
+            terminators: [0x0a, 0x0d, 0x3e],
+            timeout: 500,
+            maxBytes: 64,
+          });
+          const info = this.bytesToPrintable(infoBytes);
+          if (info) {
+            console.log(`[Bossa] Device Info: ${info}`);
+          }
+        } catch (infoErr) {
+          // I# is optional
+          console.log(`[Bossa] I# not supported (optional)`);
+        }
 
         if (version.includes("Arduino")) {
           this.isSamd = true;
-          console.log(
-            "[Bossa] Detected Arduino bootloader, enabling SAMD workarounds"
-          );
         }
 
+        console.log("[Bossa] === HANDSHAKE SUCCESS ===");
         return version;
       } catch (err) {
         lastError = err;
-        console.warn(
-          `[Bossa] Handshake attempt ${attempt + 1} failed: ${err.message}`
-        );
-        await this.flush(150);
+        console.warn(`[Bossa] Attempt ${attempt} failed: ${err.message}`);
+
+        // Small delay before retry
+        if (attempt < attempts) {
+          await this.flush(100);
+          await this.delay(200);
+        }
       }
     }
 
-    // "Suck it and see" mode - assume bootloader is there but silent
+    // All attempts failed
     if (proceedOnFailure) {
-      console.warn(
-        "[Bossa] Handshake failed but proceedOnFailure=true. Assuming bootloader is ready..."
-      );
-      // Send N# one more time to ensure binary mode
-      try {
-        await this.writeCommand("N#");
-        await this.delay(100);
-        await this.flush(50);
-      } catch (e) {
-        // Ignore
-      }
-      return "ASSUMED:Arduino Bootloader (SAM-BA extended) 2.0";
+      console.warn("[Bossa] Handshake failed, proceeding anyway (blind mode)");
+      return "ASSUMED:Arduino Bootloader";
     }
 
-    throw lastError || new Error("Handshake failed");
+    throw (
+      lastError || new Error("Handshake failed - no response from bootloader")
+    );
   }
 
   /**
@@ -421,6 +436,60 @@ export class Bossa {
     // Send Data
     console.log(`[Bossa] TX Binary: ${data.length} bytes`);
     await this.writer.write(data);
+  }
+
+  /**
+   * Write buffer to flash - SAM-BA extended protocol (Y command)
+   *
+   * From BOSSA Samba.cpp, the Y command works in TWO steps:
+   * 1. Y[src_addr],0# - Set source address (SRAM buffer) with size=0
+   * 2. Y[dst_addr],[size]# - Write to flash destination
+   *
+   * The bootloader's internal applet copies from src_addr to dst_addr
+   *
+   * @param {number} srcAddr - Source address in SRAM (where S command wrote data)
+   * @param {number} dstAddr - Destination address in flash
+   * @param {number} size - Number of bytes to write
+   */
+  async writeBuffer(srcAddr, dstAddr, size) {
+    // Step 1: Set source address (Y[src],0#)
+    const cmd1 = `Y${srcAddr.toString(16).padStart(8, "0")},0#`;
+    await this.writeCommand(cmd1);
+
+    // Minimal delay - just enough for command processing
+    await new Promise((resolve) => setTimeout(resolve, 2));
+
+    // Step 2: Execute write to destination (Y[dst],[size]#)
+    const cmd2 = `Y${dstAddr.toString(16).padStart(8, "0")},${size
+      .toString(16)
+      .padStart(8, "0")}#`;
+    await this.writeCommand(cmd2);
+
+    // Flash write delay - 256 bytes takes ~5-10ms on R4
+    await new Promise((resolve) => setTimeout(resolve, 8));
+  }
+
+  /**
+   * LEGACY: Simple write flash page (for backwards compatibility)
+   * This is the simpler single-command version that doesn't work correctly
+   * @deprecated Use writeBuffer() instead
+   */
+  async writeFlashPage(address, size) {
+    const cmd = `Y${address.toString(16)},${size.toString(16)}#`;
+    await this.writeCommand(cmd);
+    // Wait for flash write to complete
+    await new Promise((resolve) => setTimeout(resolve, 10));
+  }
+
+  /**
+   * Erase flash pages - for SAM-BA extended protocol
+   * Command: X[addr]# - erases pages starting at address
+   */
+  async eraseFlash(address) {
+    const cmd = `X${address.toString(16)}#`;
+    await this.writeCommand(cmd);
+    // Erase takes time
+    await new Promise((resolve) => setTimeout(resolve, 100));
   }
 
   async readBinary(address, size) {

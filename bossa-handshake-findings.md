@@ -4,25 +4,79 @@
 
 - We can reliably put the UNO R4 WiFi into bootloader mode (LED flashing)
 - The bootloader stays active and doesn't timeout
-- **BUT**: Commands sent to the bootloader receive NO response
+- **SOLVED**: The correct baud rate is **230400**, not 115200 or 921600!
 
-## Key Discoveries
+## 🆕 KEY FIX: Flash Programming Protocol (Dec 2025)
 
-### 🔬 CRITICAL FINDING (Dec 3, 2025)
+### The Problem
 
-**The USB device does NOT change identity when entering bootloader mode:**
+Upload completed successfully (handshake OK, 62900 bytes written) but firmware didn't persist across reboot.
+
+### Root Cause: Incorrect Y Command Usage
+
+From analyzing BOSSA source code (shumatech/BOSSA Samba.cpp), the `Y` command has **two stages**:
+
+```cpp
+// From Samba.cpp line 608-627
+void Samba::writeBuffer(uint32_t src_addr, uint32_t dst_addr, uint32_t size)
+{
+    // Step 1: Set source address (SRAM buffer)
+    snprintf(cmd, "Y%08X,0#", src_addr);  // Y[src],0#
+
+    // Step 2: Execute copy to flash
+    snprintf(cmd, "Y%08X,%08X#", dst_addr, size);  // Y[dst],[size]#
+}
+```
+
+### Previous Bug
+
+We were sending:
+
+- `S[flash_addr],[size]#` - Wrong! This writes to wrong SRAM location
+- `Y[flash_addr],[size]#` - This tries to copy from wrong source
+
+### Correct Sequence
+
+1. `S[sram_buffer],[size]#` + binary - Write to SRAM buffer at 0x20001000
+2. `Y[sram_buffer],0#` - Set source address
+3. `Y[flash_addr],[size]#` - Copy from SRAM to flash
+
+### Fix Applied
+
+- BOSSAStrategy.js now uses fixed SRAM buffer addresses (0x20001000, 0x20001100)
+- Bossa.js writeBuffer() sends the two-stage Y command
+- Double-buffering alternates between two SRAM buffers for efficiency
+
+## ✅ KEY DISCOVERY FROM WIRESHARK (Dec 3, 2025)
+
+**Analyzed the actual Arduino IDE upload using Wireshark USB capture!**
+
+See `docs/R4-USB-Protocol-Analysis.md` for detailed packet-by-packet analysis.
+
+### Critical Finding: BOSSA Baud Rate is 230400
+
+From `R4.pcapng`, the exact sequence is:
 
 ```
-Before bootloader:
-USB\VID_2341&PID_1002&REV_0100&MI_01
-USB\VID_2341&PID_1002&MI_01
-
-After bootloader:
-USB\VID_2341&PID_1002&REV_0100&MI_01
-USB\VID_2341&PID_1002&MI_01
+Frame 2589: SET LINE CODING = 1200 baud (bootloader touch)
+Frame 2593: SET CONTROL LINE STATE = DTR=1, RTS=1
+Frame 2595: SET LINE CODING = 1200 baud (again)
+Frame 2601: SET CONTROL LINE STATE = DTR=0, RTS=1 (triggers reset!)
+            ~500ms wait
+Frame 2671: SET LINE CODING = 230400 baud (BOSSA connection!)
+Frame 2675: SET CONTROL LINE STATE = DTR=1, RTS=1
+Frame 2681: BULK OUT = "N#" (BOSSA Normal mode)
+Frame 2683: BULK IN = "\n\r" (ACK)
+Frame 2685: BULK OUT = "V#" (Get Version)
+Frame 2687: BULK IN = "Arduino Bootloader (SAM-BA extended) 2.0 [Arduino:IKXYZ]"
 ```
 
-**PID stays 0x1002!** The port-switching hypothesis was WRONG.
+**The baud rate payloads (little-endian):**
+
+- 1200 baud: `b0 04 00 00` = 0x000004B0 = 1200
+- 230400 baud: `00 84 03 00` = 0x00038400 = 230400
+
+## Previous Key Discoveries (Retained for Context)
 
 ### Architecture Implications
 

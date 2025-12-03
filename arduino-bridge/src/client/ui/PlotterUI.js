@@ -8,6 +8,7 @@ export class PlotterUI {
 
     this.maxDataPoints = 100;
     this.chart = null;
+    this.frozen = false;
     this.initChart();
   }
 
@@ -61,7 +62,7 @@ export class PlotterUI {
    * @param {number[]} values - Array of Y-axis values
    */
   addData(label, values) {
-    if (!this.chart) return;
+    if (!this.chart || this.frozen) return;
 
     // Add label
     this.chart.data.labels.push(label);
@@ -116,5 +117,57 @@ export class PlotterUI {
       "#FF9F40", // Orange
     ];
     return colors[index % colors.length];
+  }
+
+  /**
+   * Toggle freeze state of the plotter
+   * @returns {boolean} - New frozen state
+   */
+  toggleFreeze() {
+    this.frozen = !this.frozen;
+    return this.frozen;
+  }
+
+  /**
+   * Check if plotter is frozen
+   * @returns {boolean}
+   */
+  isFrozen() {
+    return this.frozen;
+  }
+
+  /**
+   * Set freeze state explicitly
+   * @param {boolean} frozen
+   */
+  setFrozen(frozen) {
+    this.frozen = frozen;
+  }
+
+  /**
+   * Download the current chart as a PNG image
+   */
+  downloadPNG() {
+    if (!this.chart) return;
+
+    // Create a temporary canvas with white background for better visibility
+    const tempCanvas = document.createElement("canvas");
+    tempCanvas.width = this.canvas.width;
+    tempCanvas.height = this.canvas.height;
+    const tempCtx = tempCanvas.getContext("2d");
+
+    // Fill with white background
+    tempCtx.fillStyle = "#ffffff";
+    tempCtx.fillRect(0, 0, tempCanvas.width, tempCanvas.height);
+
+    // Draw the chart on top
+    tempCtx.drawImage(this.canvas, 0, 0);
+
+    // Convert to PNG and download
+    const link = document.createElement("a");
+    const timestamp = new Date().toISOString().replace(/[:.]/g, "-");
+    link.download = `serial-plotter-${timestamp}.png`;
+    link.href = tempCanvas.toDataURL("image/png");
+    link.click();
   }
 }

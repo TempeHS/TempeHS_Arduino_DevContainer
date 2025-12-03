@@ -1,621 +1,696 @@
 import { Bossa } from "../protocols/Bossa.js";
 
+/**
+ * BOSSA Upload Strategy for Arduino UNO R4 WiFi
+ *
+ * KNOWN LIMITATION: Web Serial API does not reliably trigger bootloader entry
+ * ===========================================================================
+ * The 1200 baud touch requires USB CDC SET_LINE_CODING control transfers.
+ * Web Serial may not send these properly, so the ESP32-S3 bridge doesn't
+ * receive the signal to reset the RA4M1 into bootloader mode.
+ *
+ * ADDITIONAL ISSUE: Even in bootloader mode, the ESP32-S3 bridge may not
+ * update its internal UART baud rate when we change the USB CDC baud rate.
+ *
+ * WORKAROUND: User must manually double-tap RESET button to enter bootloader,
+ * and we try multiple baud rates to find one that works.
+ */
 export class BOSSAStrategy {
   constructor() {
     this.name = "BOSSA (SAMD/Renesas)";
+
+    // R4 WiFi bootloader confirmed at 230400 from Wireshark capture
+    this.PRIMARY_BAUD = 230400;
+
+    // Fallback baud rates if primary doesn't work
+    this.ALL_BAUD_RATES = [
+      230400, 115200, 921600, 460800, 57600, 38400, 19200, 9600,
+    ];
+
+    this.TOUCH_BAUD = 1200; // For bootloader entry
+  }
+
+  /**
+   * Safely close port, releasing any locked streams
+   */
+  async safeClose(port) {
+    try {
+      if (port.readable && port.readable.locked) {
+        try {
+          const reader = port.readable.getReader();
+          await reader.cancel();
+          reader.releaseLock();
+        } catch (e) {
+          /* ignore */
+        }
+      }
+      if (port.writable && port.writable.locked) {
+        try {
+          const writer = port.writable.getWriter();
+          writer.releaseLock();
+        } catch (e) {
+          /* ignore */
+        }
+      }
+      if (port.readable || port.writable) {
+        await port.close();
+      }
+    } catch (e) {
+      console.warn(`[BOSSA] Port close warning: ${e.message}`);
+    }
+    // Wait for OS to release
+    await new Promise((r) => setTimeout(r, 100));
+  }
+
+  /**
+   * Perform the 1200 baud touch sequence to enter bootloader mode
+   */
+  async perform1200Touch(port) {
+    console.log("[BOSSA] === 1200 BAUD TOUCH ===");
+    console.log("[BOSSA] NOTE: This may not work with Web Serial API");
+
+    await this.safeClose(port);
+
+    console.log("[BOSSA] Opening at 1200 baud...");
+    await port.open({ baudRate: this.TOUCH_BAUD });
+
+    console.log("[BOSSA] Setting DTR=1, RTS=1");
+    await port.setSignals({ dataTerminalReady: true, requestToSend: true });
+    await new Promise((r) => setTimeout(r, 50));
+
+    console.log("[BOSSA] Setting DTR=0, RTS=1 (trigger reset)");
+    await port.setSignals({ dataTerminalReady: false, requestToSend: true });
+    await new Promise((r) => setTimeout(r, 50));
+
+    console.log("[BOSSA] Closing port after touch");
+    await port.close();
+
+    console.log("[BOSSA] Waiting 600ms for device reset...");
+    await new Promise((r) => setTimeout(r, 600));
+
+    console.log("[BOSSA] 1200 baud touch complete");
+  }
+
+  /**
+   * Fast baud rate probe - returns immediately on ASCII data, or when enough
+   * data received to determine it's garbage (wrong baud)
+   *
+   * @returns { result: 'ascii'|'garbage'|'timeout', bossa?, bytes? }
+   */
+  async fastProbe(port, baudRate, timeoutMs = 2000) {
+    console.log(
+      `[BOSSA] Fast probe at ${baudRate} baud (${timeoutMs}ms timeout)...`
+    );
+
+    try {
+      await this.safeClose(port);
+      await port.open({ baudRate: baudRate });
+      await port.setSignals({ dataTerminalReady: true, requestToSend: true });
+      await new Promise((r) => setTimeout(r, 50));
+
+      const bossa = new Bossa(port);
+      await bossa.connect();
+
+      // Send N# to trigger response
+      await bossa.writeCommand("N#");
+
+      // Wait for data with early exit
+      const collected = [];
+      const startTime = Date.now();
+
+      while (Date.now() - startTime < timeoutMs) {
+        const remaining = timeoutMs - (Date.now() - startTime);
+        const waitTime = Math.min(remaining, 30);
+
+        const timeoutPromise = new Promise((resolve) =>
+          setTimeout(() => resolve({ timeout: true }), waitTime)
+        );
+
+        const readResult = await Promise.race([
+          bossa.reader.read(),
+          timeoutPromise,
+        ]);
+
+        if (readResult.timeout) {
+          // Check if we have enough data to decide
+          if (collected.length >= 3) {
+            const isAscii = this.isValidAsciiResponse(
+              new Uint8Array(collected)
+            );
+            if (isAscii) {
+              console.log(`[BOSSA] ✓ ASCII data detected at ${baudRate}!`);
+              return {
+                result: "ascii",
+                bossa,
+                bytes: new Uint8Array(collected),
+              };
+            } else {
+              console.log(`[BOSSA] ✗ Garbage data at ${baudRate} - wrong baud`);
+              await bossa.disconnect();
+              await this.safeClose(port);
+              return { result: "garbage", bytes: new Uint8Array(collected) };
+            }
+          }
+          continue;
+        }
+
+        const { value, done } = readResult;
+        if (done) break;
+
+        if (value && value.length) {
+          collected.push(...value);
+
+          // As soon as we have enough bytes, check if ASCII
+          if (collected.length >= 2) {
+            const isAscii = this.isValidAsciiResponse(
+              new Uint8Array(collected)
+            );
+            if (isAscii) {
+              // ASCII! This is the right baud rate - return immediately
+              console.log(
+                `[BOSSA] ✓ ASCII data detected at ${baudRate}! (${collected.length} bytes)`
+              );
+              return {
+                result: "ascii",
+                bossa,
+                bytes: new Uint8Array(collected),
+              };
+            } else if (collected.length >= 4) {
+              // Got enough garbage data - wrong baud rate, exit early
+              console.log(
+                `[BOSSA] ✗ Garbage data at ${baudRate} - wrong baud (${collected.length} bytes)`
+              );
+              await bossa.disconnect();
+              await this.safeClose(port);
+              return { result: "garbage", bytes: new Uint8Array(collected) };
+            }
+          }
+        }
+      }
+
+      // Timeout with no data
+      if (collected.length === 0) {
+        console.log(`[BOSSA] ✗ No response at ${baudRate} (timeout)`);
+        await bossa.disconnect();
+        await this.safeClose(port);
+        return { result: "timeout" };
+      }
+
+      // Had some data but not enough to decide - check what we got
+      const isAscii = this.isValidAsciiResponse(new Uint8Array(collected));
+      if (isAscii) {
+        return { result: "ascii", bossa, bytes: new Uint8Array(collected) };
+      } else {
+        await bossa.disconnect();
+        await this.safeClose(port);
+        return { result: "garbage", bytes: new Uint8Array(collected) };
+      }
+    } catch (e) {
+      console.log(`[BOSSA] ✗ Error at ${baudRate}: ${e.message}`);
+      await this.safeClose(port);
+      return { result: "timeout" };
+    }
+  }
+
+  /**
+   * Complete handshake after successful probe
+   */
+  async completeHandshake(bossa, baudRate) {
+    try {
+      // Reconnect reader
+      bossa.reader.releaseLock();
+      bossa.reader = bossa.port.readable.getReader();
+
+      // Send V# to get version
+      await bossa.writeCommand("V#");
+
+      const collected = [];
+      const startTime = Date.now();
+
+      while (Date.now() - startTime < 1000) {
+        const timeoutPromise = new Promise((resolve) =>
+          setTimeout(() => resolve({ timeout: true }), 50)
+        );
+        const result = await Promise.race([
+          bossa.reader.read(),
+          timeoutPromise,
+        ]);
+
+        if (result.timeout) {
+          if (collected.length > 0) break;
+          continue;
+        }
+
+        const { value, done } = result;
+        if (done) break;
+        if (value && value.length) {
+          collected.push(...value);
+          await new Promise((r) => setTimeout(r, 20));
+        }
+      }
+
+      if (collected.length > 0) {
+        const version = Array.from(collected)
+          .map((b) => (b >= 0x20 && b <= 0x7e ? String.fromCharCode(b) : ""))
+          .join("")
+          .trim();
+        console.log(`[BOSSA] ✓✓ Version: ${version}`);
+        return { success: true, version };
+      }
+
+      return { success: true, version: `Connected at ${baudRate}` };
+    } catch (e) {
+      console.warn(`[BOSSA] Handshake warning: ${e.message}`);
+      return { success: true, version: `Connected at ${baudRate}` };
+    }
+  }
+
+  /**
+   * Check if response bytes look like valid ASCII text
+   * Valid responses should have mostly printable ASCII characters
+   */
+  isValidAsciiResponse(bytes) {
+    if (!bytes || bytes.length === 0) return false;
+
+    let printableCount = 0;
+    for (const b of bytes) {
+      // Printable ASCII (space to ~) plus common control chars (CR, LF)
+      if ((b >= 0x20 && b <= 0x7e) || b === 0x0a || b === 0x0d) {
+        printableCount++;
+      }
+    }
+
+    // At least 70% should be printable ASCII for it to be valid
+    const ratio = printableCount / bytes.length;
+    return ratio >= 0.7;
+  }
+
+  /**
+   * Ultra-fast baud rate detection:
+   * 1. Try PRIMARY_BAUD (115200) for up to 2 seconds
+   *    - If ASCII data received -> return immediately (success!)
+   *    - If garbage data received -> try all baud rates with short timeouts
+   *    - If no data after 2 seconds -> return (needs manual reset)
+   * 2. When trying all baud rates, only wait long enough to get data and decide
+   */
+  async fastBaudProbe(port) {
+    console.log("[BOSSA] ========================================");
+    console.log("[BOSSA] Ultra-fast baud detection starting...");
+    console.log(`[BOSSA] Primary baud: ${this.PRIMARY_BAUD}`);
+    console.log("[BOSSA] ========================================");
+
+    // Step 1: Try primary baud (115200) with full timeout
+    const primaryResult = await this.fastProbe(port, this.PRIMARY_BAUD, 2000);
+
+    if (primaryResult.result === "ascii") {
+      // Success! Complete handshake and return
+      await this.completeHandshake(primaryResult.bossa, this.PRIMARY_BAUD);
+      return {
+        success: true,
+        bossa: primaryResult.bossa,
+        baudRate: this.PRIMARY_BAUD,
+      };
+    }
+
+    if (primaryResult.result === "timeout") {
+      // No response at all - device probably not in bootloader mode
+      console.log("[BOSSA] No response at primary baud - needs manual reset");
+      return { success: false, needsManualReset: true, reason: "no_response" };
+    }
+
+    // Got garbage - device is responding but at different baud rate
+    console.log("[BOSSA] Got response but wrong baud - scanning all rates...");
+
+    // Step 2: Try all baud rates with short timeouts (just need enough data to decide)
+    for (const baudRate of this.ALL_BAUD_RATES) {
+      if (baudRate === this.PRIMARY_BAUD) continue; // Already tried
+
+      // Short timeout since we just need enough data to determine ASCII vs garbage
+      const result = await this.fastProbe(port, baudRate, 500);
+
+      if (result.result === "ascii") {
+        // Found it!
+        await this.completeHandshake(result.bossa, baudRate);
+        return { success: true, bossa: result.bossa, baudRate };
+      }
+
+      // If timeout at this rate, continue to next (no data = not this rate)
+      // If garbage, continue to next rate
+    }
+
+    // None worked
+    console.log("[BOSSA] No baud rate produced valid ASCII response");
+    return { success: false, needsManualReset: false, reason: "no_valid_baud" };
+  }
+
+  /**
+   * Wait for any data from the reader
+   * Returns { gotData, bytes, hex, ascii }
+   */
+  async waitForAnyData(reader, timeoutMs) {
+    const collected = [];
+    const startTime = Date.now();
+
+    try {
+      while (Date.now() - startTime < timeoutMs) {
+        const remaining = timeoutMs - (Date.now() - startTime);
+        const waitTime = Math.min(remaining, 50);
+
+        const timeoutPromise = new Promise((resolve) =>
+          setTimeout(() => resolve({ timeout: true }), waitTime)
+        );
+
+        const result = await Promise.race([reader.read(), timeoutPromise]);
+
+        if (result.timeout) {
+          // If we already have some data, return it
+          if (collected.length > 0) {
+            break;
+          }
+          continue;
+        }
+
+        const { value, done } = result;
+        if (done) break;
+
+        if (value && value.length) {
+          collected.push(...value);
+          // Got some data, wait a bit more for complete response
+          await new Promise((r) => setTimeout(r, 50));
+        }
+      }
+    } catch (e) {
+      console.warn(`[BOSSA] Read error: ${e.message}`);
+    }
+
+    if (collected.length > 0) {
+      const bytes = new Uint8Array(collected);
+      const hex = Array.from(bytes)
+        .map((b) => b.toString(16).padStart(2, "0"))
+        .join(" ");
+      const ascii = Array.from(bytes)
+        .map((b) => (b >= 0x20 && b <= 0x7e ? String.fromCharCode(b) : "."))
+        .join("");
+      return { gotData: true, bytes, hex, ascii };
+    }
+
+    return { gotData: false };
+  }
+
+  /**
+   * Alias for waitForAnyData
+   */
+  async waitForResponse(reader, timeoutMs) {
+    return this.waitForAnyData(reader, timeoutMs);
   }
 
   async prepare(port, fqbn) {
-    console.log("[BOSSA] Preparing device...");
+    console.log("[BOSSA] ========================================");
+    console.log("[BOSSA] PREPARE: Attempting bootloader entry");
+    console.log("[BOSSA] ========================================");
 
-    // Check PID to see if we are already in bootloader mode
-    // This avoids the invasive "Check" handshake if we can know for sure.
     const info = port.getInfo();
     const pid = info.usbProductId;
     const vid = info.usbVendorId;
+    console.log(
+      `[BOSSA] Device: VID=0x${vid?.toString(16)}, PID=0x${pid?.toString(16)}`
+    );
 
-    console.log(`[BOSSA] VID: ${vid}, PID: ${pid}`);
-
-    // Known Bootloader PIDs
-    // R4 WiFi: Sketch=0x1002, Bootloader=0x006D
-    // MKR WiFi 1010: Sketch=0x8054, Bootloader=0x0054
-    // Nano 33 IoT: Sketch=0x8057, Bootloader=0x0057
-    // We can check if the PID is NOT the sketch PID (if we know it)
-    // Or check against a list of known bootloader PIDs.
-
-    const BOOTLOADER_PIDS = [
-      0x006d, // R4 WiFi
-      0x0054, // MKR WiFi 1010
-      0x0057, // Nano 33 IoT
-      0x0069, // R4 Minima (Same for sketch/bootloader?)
-    ];
-
+    // Check if already in bootloader mode (different PID)
+    const BOOTLOADER_PIDS = [0x006d, 0x0054, 0x0057, 0x0069];
     if (pid && BOOTLOADER_PIDS.includes(pid)) {
-      console.log("[BOSSA] Detected Bootloader PID! Skipping reset.");
+      console.log("[BOSSA] Already in bootloader mode (detected by PID)");
       return;
     }
 
-    // Check if we can identify if it's already in bootloader mode?
-    // If the user just selected a new port after a reset, we shouldn't reset again.
-    // We can try to detect this by checking if the port is already in bootloader mode (BOSSA handshake).
-    // But opening the port might reset it if DTR is toggled.
-
-    // For now, we'll rely on a flag or heuristic.
-    // If the user is retrying (which happens in main.js handleUpload), we might want to skip the touch.
-    // But main.js calls upload() which calls prepare().
-
-    // Let's try to handshake FIRST. If it responds to BOSSA, it's already in bootloader mode.
-    let bossa = null;
-    try {
-      console.log("[BOSSA] Checking if already in bootloader mode...");
-      // Try opening at 115200 first.
-      await port.open({ baudRate: 115200 });
-      console.log("[BOSSA] Port opened at 115200");
-
-      // Explicitly set DTR/RTS to true to enable communication
-      await port.setSignals({ dataTerminalReady: true, requestToSend: true });
-
-      // Wait for port to stabilize
-      await new Promise((r) => setTimeout(r, 200));
-
-      bossa = new Bossa(port);
-      await bossa.connect();
-      console.log("[BOSSA] Connected to stream"); // Flush any garbage data from previous sketch run
-      await bossa.flush();
-      console.log("[BOSSA] Flushed stream");
-
-      // We need a timeout here because if it's NOT in bootloader mode (running sketch),
-      // it won't respond to "V#", and readResponse will hang forever.
-      await bossa.hello();
-      console.log("[BOSSA] Device already in bootloader mode! Skipping reset.");
-
-      // We must disconnect bossa (release locks) but KEEP the port open?
-      // No, flash() expects to open the port. So we close it here.
-      await bossa.disconnect();
-      await port.close();
-      return; // Skip the rest of prepare (the touch reset)
-    } catch (e) {
-      console.log(
-        "[BOSSA] Not in bootloader mode (or handshake failed), proceeding with reset touch.",
-        e
-      );
-      try {
-        if (bossa) {
-          await bossa.disconnect();
-        }
-        await port.close();
-      } catch (closeErr) {
-        // Ignore close error
-      }
-    }
-
-    // 1200bps Touch to trigger bootloader on Arduino UNO R4 WiFi
-    //
-    // ARCHITECTURE NOTE: The R4 WiFi has TWO microcontrollers:
-    //   1. Renesas RA4M1 - Main MCU (runs sketches, BOSSA bootloader at 0x006D)
-    //   2. ESP32-S3 - USB bridge (handles serial, WiFi, AND controls RA4M1 reset)
-    //
-    // The ESP32-S3 bridge firmware (UNOR4USBBridge.ino) listens for a
-    // LINE_CODING USB control transfer with baud=1200, then triggers GPIO
-    // reset sequence on the RA4M1.
-    //
-    // WEB SERIAL LIMITATION:
-    // Web Serial API does NOT send USB control transfers the same way native
-    // serial libraries do. The SET_LINE_CODING request that triggers the
-    // ESP32-S3 reset may not be sent correctly by browsers.
-    //
-    // We still attempt the touch (it might work on some systems), but
-    // users will likely need to MANUALLY double-tap the RESET button.
-
-    console.log(
-      "[BOSSA] Attempting 1200bps touch (may not work with Web Serial)..."
-    );
-
-    try {
-      // Ensure port is closed
-      if (port.readable || port.writable) {
-        try {
-          await port.close();
-        } catch (e) {
-          // Ignore
-        }
-        await new Promise((resolve) => setTimeout(resolve, 100));
-      }
-
-      // Try the classic 1200bps touch sequence
-      console.log("[BOSSA] Opening port at 1200 baud...");
-      await port.open({ baudRate: 1200 });
-
-      // Set DTR=false (what go-serial-utils does)
-      await port.setSignals({ dataTerminalReady: false, requestToSend: false });
-      await new Promise((resolve) => setTimeout(resolve, 100));
-
-      // Close port
-      await port.close();
-      console.log(
-        "[BOSSA] 1200bps touch sent (Web Serial may not trigger actual reset)"
-      );
-
-      // Wait for potential reset
-      await new Promise((resolve) => setTimeout(resolve, 500));
-    } catch (e) {
-      console.log("[BOSSA] 1200bps touch failed:", e.message);
-      // Clean up
-      try {
-        if (port.readable || port.writable) {
-          await port.close();
-        }
-      } catch (closeErr) {
-        // Ignore
-      }
-    }
-
-    // KEY DISCOVERY: On Arduino R4 WiFi, the USB port DOES NOT re-enumerate!
-    // The PID stays at 0x1002 even in bootloader mode.
-    //
-    // The ESP32-S3 bridge handles the USB interface continuously.
-    // When the RA4M1 enters bootloader mode, the ESP32 internally routes
-    // serial data to it WITHOUT changing the USB identity.
-    //
-    // This means our existing port object should still work.
-    // The problem must be elsewhere (timing, baud rate, ESP32 bridge behavior).
-
-    // Wait for the device to reset and stabilize
-    console.log("[BOSSA] Waiting for device to reset and stabilize...");
-    await new Promise((resolve) => setTimeout(resolve, 2000));
-
-    console.log(
-      "[BOSSA] Device should now be in bootloader mode (same port, same PID 0x1002)"
-    );
-  }
-
-  /**
-   * Force LINE_CODING CDC event by closing and reopening port at each baud rate.
-   * Web Serial may not send LINE_CODING when just changing baudRate on an open port.
-   * The ESP32-S3 bridge relies on this USB control transfer to update internal UART baud.
-   *
-   * Strategy: Close port completely, wait, then open at new baud rate.
-   * This should trigger a fresh SET_LINE_CODING USB control transfer.
-   */
-  async forceLineCodingBaudChange(port, targetBaud, label = "") {
-    const logPrefix = label ? `[BOSSA ${label}]` : "[BOSSA]";
-
-    // Ensure port is completely closed
-    if (port.readable || port.writable) {
-      console.log(`${logPrefix} Closing port to force LINE_CODING...`);
-      try {
-        await port.close();
-      } catch (e) {
-        // Ignore close errors
-      }
-      // Wait for OS to release port
-      await new Promise((r) => setTimeout(r, 200));
-    }
-
-    // Open at target baud - this should trigger SET_LINE_CODING
-    console.log(
-      `${logPrefix} Opening at ${targetBaud} baud (forcing LINE_CODING)...`
-    );
-    await port.open({ baudRate: targetBaud });
-
-    // Set signals
-    await port.setSignals({ dataTerminalReady: true, requestToSend: true });
-
-    // Wait for baud rate to propagate through ESP32-S3 bridge
-    await new Promise((r) => setTimeout(r, 100));
-  }
-
-  /**
-   * Aggressive baud rate cycling to stimulate auto-baud detection.
-   * The ESP32-S3 bridge might need multiple LINE_CODING events to sync.
-   * SAM-BA bootloader has auto-baud that expects 0x80 bytes at startup.
-   */
-  async aggressiveBaudCycle(port) {
-    console.log("[BOSSA] Aggressive baud cycling to wake up bridge...");
-
-    const cycleBauds = [115200, 921600, 115200, 230400, 115200];
-
-    for (const baud of cycleBauds) {
-      try {
-        // Force LINE_CODING by close/reopen
-        if (port.readable || port.writable) {
-          await port.close();
-          await new Promise((r) => setTimeout(r, 50));
-        }
-
-        await port.open({ baudRate: baud });
-        await port.setSignals({ dataTerminalReady: true, requestToSend: true });
-
-        // Send auto-baud stimulation byte (0x80)
-        const writer = port.writable.getWriter();
-        try {
-          await writer.write(new Uint8Array([0x80]));
-        } finally {
-          writer.releaseLock();
-        }
-
-        await new Promise((r) => setTimeout(r, 30));
-      } catch (e) {
-        // Continue cycling even if one fails
-        console.log(`[BOSSA] Cycle at ${baud} failed:`, e.message);
-      }
-    }
-
-    // End with port closed so next phase can open cleanly
-    try {
-      if (port.readable || port.writable) {
-        await port.close();
-        await new Promise((r) => setTimeout(r, 100));
-      }
-    } catch (e) {
-      // Ignore
-    }
-  }
-
-  /**
-   * Send extended auto-baud preamble.
-   * SAM-BA bootloader uses auto-baud detection that looks for specific bit patterns.
-   * Send multiple 0x80 bytes (which have a nice clock-like pattern: 1000 0000).
-   */
-  async sendAutoBaudPreamble(port, bossa, count = 50) {
-    console.log(`[BOSSA] Sending ${count}-byte auto-baud preamble...`);
-
-    const writer = port.writable.getWriter();
-    try {
-      // Send 0x80 bytes in bursts
-      const preamble = new Uint8Array(count).fill(0x80);
-      await writer.write(preamble);
-
-      // Also try sending some newlines (SAM-BA likes those)
-      await new Promise((r) => setTimeout(r, 50));
-      await writer.write(new Uint8Array([0x0d, 0x0a, 0x0d, 0x0a])); // CR LF CR LF
-
-      await new Promise((r) => setTimeout(r, 100));
-    } finally {
-      writer.releaseLock();
-    }
-
-    // Flush any response
-    await bossa.flush(200);
-  }
-
-  /**
-   * Toggle DTR/RTS to potentially reset internal bridge state.
-   */
-  async toggleSignals(port) {
-    console.log("[BOSSA] Toggling DTR/RTS to reset bridge state...");
-
-    // Sequence: high -> low -> high (like a reset pulse)
-    const sequences = [
-      { dataTerminalReady: true, requestToSend: true },
-      { dataTerminalReady: false, requestToSend: false },
-      { dataTerminalReady: true, requestToSend: false },
-      { dataTerminalReady: false, requestToSend: true },
-      { dataTerminalReady: true, requestToSend: true },
-    ];
-
-    for (const signals of sequences) {
-      await port.setSignals(signals);
-      await new Promise((r) => setTimeout(r, 50));
-    }
-
-    await new Promise((r) => setTimeout(r, 100));
+    // Try the 1200 baud touch
+    await this.perform1200Touch(port);
   }
 
   async flash(port, data, progressCallback, fqbn) {
-    console.log("[BOSSA] Starting flash...");
+    console.log("[BOSSA] ========================================");
+    console.log("[BOSSA] FLASH: Starting upload to R4 WiFi");
+    console.log("[BOSSA] ========================================");
 
-    // Extended baud rate matrix for brute-force discovery
-    // UNO R4 WiFi bootloader uses 203400 over physical UART but USB CDC should be baud-agnostic
-    // Testing multiple rates in case the ESP32-S3 bridge has specific requirements
-    const baudRates = [
-      115200, // Most common for SAM-BA over USB
-      921600, // Official BOSSA default for fast USB
-      230400, // 2x standard
-      460800, // 4x standard
-      57600, // Legacy
-      38400, // Legacy
-      19200, // Very legacy
-      9600, // Ultra legacy
-    ];
-
-    let connected = false;
     let bossa = null;
-    let successfulConfig = null;
+    let workingBaud = null;
 
-    // =======================================================================
-    // PHASE 0: Aggressive baud cycling to wake up ESP32-S3 bridge
-    // =======================================================================
-    console.log(
-      "[BOSSA] Phase 0: Aggressive baud cycling to stimulate bridge..."
-    );
+    // Try direct connection at PRIMARY_BAUD (230400 - confirmed from Wireshark)
+    if (progressCallback)
+      progressCallback(5, `Connecting at ${this.PRIMARY_BAUD} baud...`);
+
     try {
-      await this.aggressiveBaudCycle(port);
-    } catch (e) {
-      console.log("[BOSSA] Baud cycling failed, continuing anyway:", e.message);
-    }
+      await this.safeClose(port);
+      await port.open({ baudRate: this.PRIMARY_BAUD });
+      await port.setSignals({ dataTerminalReady: true, requestToSend: true });
+      await new Promise((r) => setTimeout(r, 100));
 
-    // =======================================================================
-    // PHASE 1: Force LINE_CODING with port close/reopen at each baud rate
-    // =======================================================================
-    console.log("[BOSSA] Phase 1: Force LINE_CODING with close/reopen...");
+      bossa = new Bossa(port);
+      await bossa.connect();
 
-    for (const baud of [115200, 921600, 230400]) {
-      if (connected) break;
+      // Send N# to verify bootloader is responding
+      console.log("[BOSSA] Sending N# command to verify bootloader...");
+      await bossa.writeCommand("N#");
 
-      try {
-        // Force LINE_CODING by closing and reopening
-        await this.forceLineCodingBaudChange(port, baud, `Phase1-${baud}`);
+      // Wait for response
+      const response = await this.waitForResponse(bossa.reader, 2000);
 
-        // Toggle signals to potentially reset bridge state
-        await this.toggleSignals(port);
-
-        bossa = new Bossa(port);
-        await bossa.connect();
-
-        // Send extended auto-baud preamble
-        await this.sendAutoBaudPreamble(port, bossa, 30);
-
-        if (progressCallback) progressCallback(5, `Handshake (${baud})...`);
-        await bossa.hello({ proceedOnFailure: false, attempts: 5 });
-
-        connected = true;
-        successfulConfig = { baud, phase: 1, method: "force-line-coding" };
-        console.log(`[BOSSA] SUCCESS at Phase 1! Baud: ${baud}`);
-        break;
-      } catch (e) {
-        console.warn(`[BOSSA] Phase 1 at ${baud} failed:`, e.message);
-        if (bossa) {
-          await bossa.disconnect();
-          bossa = null;
-        }
-        try {
-          if (port.readable || port.writable) await port.close();
-        } catch (closeErr) {
-          /* ignore */
-        }
-        await new Promise((r) => setTimeout(r, 200));
+      if (response.gotData && this.isValidAsciiResponse(response.bytes)) {
+        workingBaud = this.PRIMARY_BAUD;
+        console.log(`[BOSSA] ✓✓ Connected at ${workingBaud}`);
+        console.log(`[BOSSA] Response: ${response.ascii}`);
+      } else {
+        console.log("[BOSSA] No valid response at primary baud");
+        await bossa.disconnect();
+        await this.safeClose(port);
       }
+    } catch (e) {
+      console.log(`[BOSSA] Error at ${this.PRIMARY_BAUD}: ${e.message}`);
+      await this.safeClose(port);
     }
 
-    // =======================================================================
-    // PHASE 2: Multiple open/close cycles with extended delays
-    // =======================================================================
-    if (!connected) {
-      console.log("[BOSSA] Phase 2: Extended delays with multiple cycles...");
+    // If primary baud failed, try all baud rates
+    if (!workingBaud) {
+      console.log("[BOSSA] Trying all baud rates...");
+      for (const baudRate of this.ALL_BAUD_RATES) {
+        if (baudRate === this.PRIMARY_BAUD) continue;
 
-      for (const baud of baudRates.slice(0, 4)) {
-        if (connected) break;
+        if (progressCallback) progressCallback(5, `Trying ${baudRate} baud...`);
 
         try {
-          // Do multiple open/close cycles at this baud rate
-          for (let cycle = 0; cycle < 3; cycle++) {
-            if (port.readable || port.writable) {
-              await port.close();
-              await new Promise((r) => setTimeout(r, 300));
-            }
-
-            await port.open({ baudRate: baud });
-            await port.setSignals({
-              dataTerminalReady: true,
-              requestToSend: true,
-            });
-            await new Promise((r) => setTimeout(r, 100));
-          }
-
-          // Wait longer after cycling
-          await new Promise((r) => setTimeout(r, 500));
+          await this.safeClose(port);
+          await port.open({ baudRate });
+          await port.setSignals({
+            dataTerminalReady: true,
+            requestToSend: true,
+          });
+          await new Promise((r) => setTimeout(r, 100));
 
           bossa = new Bossa(port);
           await bossa.connect();
 
-          // More aggressive preamble
-          await this.sendAutoBaudPreamble(port, bossa, 100);
+          await bossa.writeCommand("N#");
+          const response = await this.waitForResponse(bossa.reader, 1000);
 
-          if (progressCallback) progressCallback(5, `Testing ${baud}...`);
-          await bossa.hello({ proceedOnFailure: false, attempts: 5 });
-
-          connected = true;
-          successfulConfig = { baud, phase: 2, method: "multi-cycle" };
-          console.log(`[BOSSA] SUCCESS at Phase 2! Baud: ${baud}`);
-          break;
-        } catch (e) {
-          console.warn(`[BOSSA] Phase 2 at ${baud} failed:`, e.message);
-          if (bossa) {
+          if (response.gotData && this.isValidAsciiResponse(response.bytes)) {
+            workingBaud = baudRate;
+            console.log(`[BOSSA] ✓✓ Connected at ${workingBaud}`);
+            break;
+          } else {
             await bossa.disconnect();
-            bossa = null;
+            await this.safeClose(port);
           }
-          try {
-            if (port.readable || port.writable) await port.close();
-          } catch (closeErr) {
-            /* ignore */
-          }
-          await new Promise((r) => setTimeout(r, 200));
+        } catch (e) {
+          console.log(`[BOSSA] Error at ${baudRate}: ${e.message}`);
+          await this.safeClose(port);
         }
       }
     }
 
-    // =======================================================================
-    // PHASE 3: Original brute-force with all baud rates and signal configs
-    // =======================================================================
-    if (!connected) {
-      console.log(
-        "[BOSSA] Phase 3: Full brute-force with signal variations..."
-      );
+    // If no baud rate worked, prompt user for manual reset
+    if (!workingBaud) {
+      console.log("[BOSSA] ========================================");
+      console.log("[BOSSA] MANUAL BOOTLOADER ENTRY REQUIRED");
+      console.log("[BOSSA] ========================================");
 
-      const signalConfigs = [
-        { dtr: true, rts: true, delay: 500, label: "DTR+RTS high, 500ms" },
-        {
-          dtr: false,
-          rts: true,
-          delay: 500,
-          label: "DTR low, RTS high, 500ms",
-        },
-        {
-          dtr: true,
-          rts: false,
-          delay: 500,
-          label: "DTR high, RTS low, 500ms",
-        },
-        { dtr: false, rts: false, delay: 1000, label: "DTR+RTS low, 1000ms" },
-        { dtr: true, rts: true, delay: 1500, label: "DTR+RTS high, 1500ms" },
-      ];
-
-      outerLoop: for (const baud of baudRates) {
-        for (const config of signalConfigs) {
-          try {
-            console.log(`[BOSSA] Trying ${baud} baud with ${config.label}`);
-
-            // Force LINE_CODING
-            if (port.readable || port.writable) {
-              await port.close();
-              await new Promise((r) => setTimeout(r, 100));
-            }
-
-            await port.open({ baudRate: baud });
-            await port.setSignals({
-              dataTerminalReady: config.dtr,
-              requestToSend: config.rts,
-            });
-            await new Promise((r) => setTimeout(r, config.delay));
-
-            bossa = new Bossa(port);
-            await bossa.connect();
-            await bossa.flush(300);
-
-            if (progressCallback) progressCallback(5, `Testing ${baud}...`);
-            await bossa.hello({ proceedOnFailure: false, attempts: 3 });
-
-            connected = true;
-            successfulConfig = { baud, ...config, phase: 3 };
-            console.log(
-              `[BOSSA] SUCCESS at Phase 3! Config: ${JSON.stringify(
-                successfulConfig
-              )}`
-            );
-            break outerLoop;
-          } catch (e) {
-            if (bossa) {
-              await bossa.disconnect();
-              bossa = null;
-            }
-            try {
-              if (port.readable || port.writable) await port.close();
-            } catch (closeErr) {
-              /* ignore */
-            }
-            await new Promise((r) => setTimeout(r, 100));
-          }
-        }
+      if (progressCallback) {
+        progressCallback(
+          0,
+          "⚠️ Double-tap RESET button on Arduino, then click OK"
+        );
       }
-    }
 
-    // =======================================================================
-    // PHASE 4: "Suck it and see" - proceed anyway with best guess
-    // =======================================================================
-    if (!connected) {
-      console.warn(
-        "[BOSSA] Phase 4: All handshakes failed. Trying 'proceed anyway' mode..."
-      );
+      const userConfirmed = await this.promptUserForBootloader();
+      if (!userConfirmed) {
+        throw new Error("Upload cancelled by user");
+      }
+
+      // Wait for board to enter bootloader and try again
+      await new Promise((r) => setTimeout(r, 1000));
+
+      if (progressCallback)
+        progressCallback(5, `Retrying at ${this.PRIMARY_BAUD}...`);
+
       try {
-        if (port.readable || port.writable) {
-          await port.close();
-          await new Promise((r) => setTimeout(r, 200));
-        }
-
-        await port.open({ baudRate: 115200 });
+        await this.safeClose(port);
+        await port.open({ baudRate: this.PRIMARY_BAUD });
         await port.setSignals({ dataTerminalReady: true, requestToSend: true });
-        await new Promise((r) => setTimeout(r, 1000));
+        await new Promise((r) => setTimeout(r, 100));
 
         bossa = new Bossa(port);
         await bossa.connect();
-        await bossa.flush(500);
 
-        if (progressCallback) progressCallback(5, "Proceeding blind...");
-        await bossa.hello({ proceedOnFailure: true, attempts: 1 });
+        await bossa.writeCommand("N#");
+        const response = await this.waitForResponse(bossa.reader, 2000);
 
-        connected = true;
-        successfulConfig = { baud: 115200, phase: 4, mode: "blind" };
-        console.warn("[BOSSA] Proceeding WITHOUT handshake confirmation!");
+        if (response.gotData && this.isValidAsciiResponse(response.bytes)) {
+          workingBaud = this.PRIMARY_BAUD;
+          console.log(
+            `[BOSSA] ✓✓ Connected after manual reset at ${workingBaud}`
+          );
+        }
       } catch (e) {
-        console.error("[BOSSA] Even blind mode failed:", e.message);
-        if (bossa) {
-          await bossa.disconnect();
-          bossa = null;
-        }
-        try {
-          if (port.readable || port.writable) await port.close();
-        } catch (closeErr) {
-          /* ignore */
-        }
+        console.log(`[BOSSA] Error after manual reset: ${e.message}`);
       }
     }
 
-    if (!connected) {
+    if (!workingBaud) {
       throw new Error(
-        "Failed to connect to BOSSA device. Device may be in bootloader mode but unresponsive.\n\n" +
-          "POSSIBLE CAUSES:\n" +
-          "• Web Serial API may not send USB CDC LINE_CODING events properly\n" +
-          "• ESP32-S3 bridge internal baud rate not synchronized\n\n" +
-          "WORKAROUNDS:\n" +
-          "1. Try double-tapping the RESET button to enter bootloader mode\n" +
-          "2. Try a different browser (Chrome usually works best)\n" +
-          "3. Check browser console for detailed debug output"
+        "Failed to connect to bootloader at any baud rate.\n\n" +
+          "Please ensure:\n" +
+          "1. Double-tap RESET quickly (LED should pulse/fade)\n" +
+          "2. Click Upload within 8 seconds\n" +
+          "3. The board is properly connected via USB\n\n" +
+          "If the LED never pulses, try tapping RESET faster."
       );
     }
 
-    if (successfulConfig) {
-      console.log(`[BOSSA] Using config: ${JSON.stringify(successfulConfig)}`);
-    }
-
-    // Re-instantiate bossa if we broke out of the loop (it should be valid, but let's be safe)
-    // Actually, 'bossa' variable holds the connected instance from the loop.
-    // We are ready to flash.
-
+    // Now flash the firmware
     try {
-      if (progressCallback) progressCallback(10, "Connected");
+      if (progressCallback) progressCallback(10, `Connected at ${workingBaud}`);
 
-      // Determine Offset based on FQBN
-      let offset = 0x2000; // Default for SAMD (MKR)
-      if (fqbn && fqbn.includes("renesas_uno")) {
-        offset = 0x4000; // Uno R4
+      // Reconnect reader since we consumed it during probe
+      try {
+        bossa.reader.releaseLock();
+      } catch (e) {
+        /* ignore */
       }
+      bossa.reader = port.readable.getReader();
 
-      // Prepare Data
+      // Determine flash offset and SRAM buffer addresses for R4
+      let offset = 0x2000; // Default for SAMD
+      let sramBufferA = 0x20001000; // SRAM buffer A address
+      let sramBufferB = 0x20001100; // SRAM buffer B address (for double-buffering)
+
+      if (fqbn && fqbn.includes("renesas_uno")) {
+        offset = 0x4000; // Uno R4 flash starts at 0x4000
+        // R4 SRAM starts at 0x20000000, bootloader uses buffer area
+        // Based on BOSSA Device.cpp for similar Cortex-M4 devices
+        sramBufferA = 0x20001000;
+        sramBufferB = 0x20001100;
+      }
+      console.log(`[BOSSA] Flash offset: 0x${offset.toString(16)}`);
+      console.log(`[BOSSA] SRAM buffer: 0x${sramBufferA.toString(16)}`);
+
       const firmware = new Uint8Array(data);
-      const pageSize = 256;
       const totalBytes = firmware.length;
 
-      if (progressCallback) progressCallback(10, "Flashing...");
+      // Step 1: Erase flash (required for R4)
+      console.log(`[BOSSA] Erasing flash...`);
+      if (progressCallback) progressCallback(12, "Erasing flash...");
 
-      let currentAddr = offset;
-      for (let i = 0; i < totalBytes; i += pageSize) {
-        const chunk = firmware.subarray(i, Math.min(i + pageSize, totalBytes));
+      // Calculate number of pages to erase (R4 page size is 8192 bytes / 0x2000)
+      const erasePageSize = 0x2000; // 8KB pages for Renesas RA4M1
+      const pagesToErase = Math.ceil(totalBytes / erasePageSize);
+      console.log(
+        `[BOSSA] Erasing ${pagesToErase} pages (${totalBytes} bytes)`
+      );
 
-        // Write Chunk
-        await bossa.writeBinary(currentAddr, chunk);
-        currentAddr += chunk.length;
+      // Send erase command: X[addr]#
+      // The Arduino bootloader uses 'X' for erase
+      await bossa.writeCommand(`X${offset.toString(16)}#`);
 
-        if (progressCallback) {
-          progressCallback(Math.round((i / totalBytes) * 100), "Flashing");
-        }
+      // Wait for erase to complete (can take a few seconds)
+      await new Promise((r) => setTimeout(r, 2000));
 
-        // Small delay to allow write
-        await new Promise((r) => setTimeout(r, 10));
+      // Flush any response
+      await bossa.flush(200);
+
+      // Step 2: Write flash in page-sized chunks
+      // SAM-BA extended protocol flow:
+      // 1. S[sram_addr],[size]# - Write data to SRAM buffer
+      // 2. Y[sram_addr],0# - Set source address
+      // 3. Y[flash_addr],[size]# - Copy from SRAM to flash
+      const flashPageSize = 256; // Flash page size for programming
+      console.log(
+        `[BOSSA] Writing ${totalBytes} bytes in ${flashPageSize}-byte pages...`
+      );
+      if (progressCallback) progressCallback(15, "Writing flash...");
+
+      let flashAddr = offset;
+      let useBufferA = true; // Alternate between buffers for double-buffering
+
+      for (let i = 0; i < totalBytes; i += flashPageSize) {
+        const chunk = firmware.subarray(
+          i,
+          Math.min(i + flashPageSize, totalBytes)
+        );
+
+        // Select buffer address
+        const sramBuffer = useBufferA ? sramBufferA : sramBufferB;
+
+        // Step 2a: Write chunk to SRAM buffer
+        // S[sram_buffer],[size]# + binary data
+        await bossa.writeBinary(sramBuffer, chunk);
+
+        // Step 2b: Commit SRAM buffer to flash using writeBuffer
+        // This sends: Y[src],0# then Y[dst],[size]#
+        await bossa.writeBuffer(sramBuffer, flashAddr, chunk.length);
+
+        flashAddr += chunk.length;
+        useBufferA = !useBufferA; // Alternate buffers
+
+        const percent = 15 + Math.round((i / totalBytes) * 80);
+        if (progressCallback) progressCallback(percent, "Writing flash...");
+
+        // Small delay between pages
+        await new Promise((r) => setTimeout(r, 5));
       }
 
-      if (progressCallback) progressCallback(100, "Resetting...");
+      console.log("[BOSSA] Write complete, resetting device...");
+      if (progressCallback) progressCallback(98, "Resetting...");
 
-      // Reset
+      // Reset the device to run the new firmware
       await bossa.go(offset);
 
-      console.log("[BOSSA] Flash complete");
+      if (progressCallback) progressCallback(100, "Complete!");
+      console.log("[BOSSA] Upload successful!");
     } finally {
-      if (bossa) await bossa.disconnect();
-      // Ensure port is closed
-      if (port.readable || port.writable) {
-        await port.close();
+      if (bossa) {
+        try {
+          await bossa.disconnect();
+        } catch (e) {
+          /* ignore */
+        }
       }
+      await this.safeClose(port);
     }
+  }
+
+  async promptUserForBootloader() {
+    return new Promise((resolve) => {
+      const message =
+        "🔴 MANUAL RESET REQUIRED 🔴\n\n" +
+        "Web Serial cannot automatically enter bootloader mode.\n\n" +
+        "Please do this NOW:\n" +
+        "1. Find the RESET button on your Arduino\n" +
+        "2. Double-tap it QUICKLY (like double-clicking a mouse)\n" +
+        "3. The built-in LED should start pulsing/fading\n" +
+        "4. Click OK within 8 seconds\n\n" +
+        "Click OK when the LED is pulsing, or Cancel to abort.";
+
+      const result = window.confirm(message);
+      resolve(result);
+    });
   }
 }

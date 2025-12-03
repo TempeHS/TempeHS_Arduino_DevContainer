@@ -29,6 +29,8 @@ const dtrCheck = document.getElementById("dtrCheck");
 const rtsCheck = document.getElementById("rtsCheck");
 const clearBtn = document.getElementById("clearBtn");
 const downloadBtn = document.getElementById("downloadBtn");
+const freezePlotBtn = document.getElementById("freezePlotBtn");
+const downloadPlotBtn = document.getElementById("downloadPlotBtn");
 
 // Input Bar Elements
 const serialInput = document.getElementById("serialInput");
@@ -74,6 +76,18 @@ downloadBtn.addEventListener("click", () => {
   terminal.downloadLog();
 });
 
+// Freeze Plot Button Handler
+freezePlotBtn.addEventListener("click", () => {
+  const frozen = plotter.toggleFreeze();
+  freezePlotBtn.textContent = frozen ? "▶ Resume Plot" : "⏸ Freeze Plot";
+  freezePlotBtn.style.backgroundColor = frozen ? "#4caf50" : "";
+});
+
+// Download Plot as PNG Button Handler
+downloadPlotBtn.addEventListener("click", () => {
+  plotter.downloadPNG();
+});
+
 // Toggle View Handler
 toggleViewBtn.addEventListener("click", () => {
   isPlotterMode = !isPlotterMode;
@@ -82,11 +96,15 @@ toggleViewBtn.addEventListener("click", () => {
     terminalContainer.style.visibility = "hidden";
     plotterContainer.style.visibility = "visible";
     toggleViewBtn.textContent = "Switch to Monitor";
+    freezePlotBtn.style.display = "inline-block";
+    downloadPlotBtn.style.display = "inline-block";
     plotter.resize();
   } else {
     terminalContainer.style.visibility = "visible";
     plotterContainer.style.visibility = "hidden";
     toggleViewBtn.textContent = "Switch to Plotter";
+    freezePlotBtn.style.display = "none";
+    downloadPlotBtn.style.display = "none";
     terminal.fit(); // Ensure terminal fits new visibility
   }
 });
@@ -692,96 +710,120 @@ const BAUD_RATES_TO_TRY = [
 ];
 
 // Auto-detect baud rate by checking if received data is readable ASCII
+// Fast detection: Try 115200 first, if ASCII -> done, if garbage -> try others, if no data -> use 115200
 async function autoDetectBaudRate(port, terminal) {
   terminal.write("\r\nAuto-detecting baud rate...\r\n");
 
-  for (const baudRate of BAUD_RATES_TO_TRY) {
-    try {
-      // Open port at this baud rate
-      await port.open({ baudRate });
+  const PRIMARY_BAUD = 115200;
 
-      // Wait for Arduino to reset and bootloader to finish (triggered by DTR on open)
-      await new Promise((resolve) => setTimeout(resolve, 1500));
+  // Step 1: Try primary baud rate (115200) with longer timeout
+  const primaryResult = await tryBaudRate(port, PRIMARY_BAUD, terminal, 2000);
 
-      // Collect data for a short time
-      const reader = port.readable.getReader();
-      let receivedData = [];
-      let dataReceived = false;
-
-      // Set a timeout for data collection (1.5 seconds to catch slow serial prints)
-      const timeoutPromise = new Promise((resolve) =>
-        setTimeout(resolve, 1500)
-      );
-
-      const readPromise = (async () => {
-        try {
-          while (true) {
-            const { value, done } = await reader.read();
-            if (done) break;
-            if (value && value.length > 0) {
-              dataReceived = true;
-              receivedData.push(...value);
-              // Once we have enough data to analyze, stop
-              if (receivedData.length >= 20) break;
-            }
-          }
-        } catch (e) {
-          // Read interrupted, that's fine
-        }
-      })();
-
-      // Wait for either timeout or enough data
-      await Promise.race([timeoutPromise, readPromise]);
-
-      // Cancel the reader
-      try {
-        await reader.cancel();
-      } catch (e) {}
-      reader.releaseLock();
-
-      // Close port
-      await port.close();
-
-      // If no data received at this baud rate, try next
-      if (!dataReceived || receivedData.length === 0) {
-        terminal.write(`  ${baudRate}: no data\r\n`);
-        continue;
-      }
-
-      // Check if data is readable ASCII (printable chars, newlines, etc.)
-      const printableCount = receivedData.filter(
-        (byte) =>
-          (byte >= 32 && byte <= 126) || // Printable ASCII
-          byte === 10 ||
-          byte === 13 ||
-          byte === 9 // LF, CR, TAB
-      ).length;
-
-      const readableRatio = printableCount / receivedData.length;
-
-      terminal.write(
-        `  ${baudRate}: ${Math.round(readableRatio * 100)}% readable (${
-          receivedData.length
-        } bytes)\r\n`
-      );
-
-      // If more than 80% is readable ASCII, this is likely the correct baud rate
-      if (readableRatio >= 0.8) {
-        terminal.write(`\r\n✓ Detected baud rate: ${baudRate}\r\n`);
-        return baudRate;
-      }
-    } catch (e) {
-      // Port error, try to close and continue
-      try {
-        await port.close();
-      } catch (e2) {}
-      continue;
-    }
+  if (primaryResult.status === "ascii") {
+    // Got readable ASCII - this is the right baud rate
+    terminal.write(`\r\n✓ Detected baud rate: ${PRIMARY_BAUD}\r\n`);
+    return PRIMARY_BAUD;
   }
 
-  // No good match found, return default
-  terminal.write("\r\nCould not detect baud rate, using 9600\r\n");
-  return 9600;
+  if (primaryResult.status === "no_data") {
+    // No data at all - sketch probably not printing, use default
+    terminal.write(`  ${PRIMARY_BAUD}: no data\r\n`);
+    terminal.write("\r\n⚠ No serial data detected.\r\n");
+    terminal.write("  (Sketch may not be printing to Serial)\r\n");
+    terminal.write(`  Using default: ${PRIMARY_BAUD}\r\n`);
+    return PRIMARY_BAUD;
+  }
+
+  // Got garbage data - wrong baud rate, try others with short timeouts
+  terminal.write(
+    `  ${PRIMARY_BAUD}: ${primaryResult.readablePercent}% readable - trying other rates...\r\n`
+  );
+
+  for (const baudRate of BAUD_RATES_TO_TRY) {
+    if (baudRate === PRIMARY_BAUD) continue; // Already tried
+
+    const result = await tryBaudRate(port, baudRate, terminal, 800);
+
+    if (result.status === "ascii") {
+      terminal.write(`\r\n✓ Detected baud rate: ${baudRate}\r\n`);
+      return baudRate;
+    }
+
+    if (result.status === "garbage") {
+      terminal.write(`  ${baudRate}: ${result.readablePercent}% readable\r\n`);
+    }
+    // Skip 'no_data' results silently - just means device stopped responding
+  }
+
+  // No good match found, return primary
+  terminal.write(`\r\nCould not detect baud rate, using ${PRIMARY_BAUD}\r\n`);
+  return PRIMARY_BAUD;
+}
+
+// Try a single baud rate and return status: 'ascii', 'garbage', or 'no_data'
+async function tryBaudRate(port, baudRate, terminal, timeoutMs) {
+  try {
+    await port.open({ baudRate });
+
+    // Wait for Arduino reset/bootloader
+    await new Promise((resolve) => setTimeout(resolve, 500));
+
+    const reader = port.readable.getReader();
+    let receivedData = [];
+    let dataReceived = false;
+
+    const timeoutPromise = new Promise((resolve) =>
+      setTimeout(resolve, timeoutMs)
+    );
+
+    const readPromise = (async () => {
+      try {
+        while (true) {
+          const { value, done } = await reader.read();
+          if (done) break;
+          if (value && value.length > 0) {
+            dataReceived = true;
+            receivedData.push(...value);
+            if (receivedData.length >= 20) break;
+          }
+        }
+      } catch (e) {
+        // Read interrupted
+      }
+    })();
+
+    await Promise.race([timeoutPromise, readPromise]);
+
+    try {
+      await reader.cancel();
+    } catch (e) {}
+    reader.releaseLock();
+    await port.close();
+
+    if (!dataReceived || receivedData.length === 0) {
+      return { status: "no_data" };
+    }
+
+    // Check if data is readable ASCII
+    const printableCount = receivedData.filter(
+      (byte) =>
+        (byte >= 32 && byte <= 126) || byte === 10 || byte === 13 || byte === 9
+    ).length;
+
+    const readableRatio = printableCount / receivedData.length;
+    const readablePercent = Math.round(readableRatio * 100);
+
+    if (readableRatio >= 0.8) {
+      return { status: "ascii", readablePercent };
+    } else {
+      return { status: "garbage", readablePercent };
+    }
+  } catch (e) {
+    try {
+      await port.close();
+    } catch (e2) {}
+    return { status: "no_data" };
+  }
 }
 
 // Connect Button Handler
