@@ -1,0 +1,551 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>BOSSA Protocol EXACT Byte-Level Test</title>
+    <style>
+      * {
+        box-sizing: border-box;
+      }
+      body {
+        font-family: "Consolas", "Monaco", monospace;
+        margin: 0;
+        padding: 20px;
+        background: #1e1e2e;
+        color: #cdd6f4;
+      }
+      h1 {
+        color: #89b4fa;
+        margin-bottom: 5px;
+      }
+      .subtitle {
+        color: #a6adc8;
+        margin-bottom: 20px;
+        font-size: 14px;
+      }
+      .controls {
+        background: #313244;
+        padding: 15px;
+        border-radius: 8px;
+        margin-bottom: 20px;
+      }
+      button {
+        background: #89b4fa;
+        color: #1e1e2e;
+        border: none;
+        padding: 10px 20px;
+        border-radius: 4px;
+        cursor: pointer;
+        font-weight: bold;
+      }
+      button:hover {
+        background: #b4befe;
+      }
+      #output {
+        background: #11111b;
+        padding: 15px;
+        border-radius: 8px;
+        white-space: pre-wrap;
+        font-size: 12px;
+        max-height: 800px;
+        overflow-y: auto;
+      }
+      .pass {
+        color: #a6e3a1;
+      }
+      .fail {
+        color: #f38ba8;
+      }
+      .warn {
+        color: #f9e2af;
+      }
+      .info {
+        color: #89b4fa;
+      }
+      .header {
+        color: #cba6f7;
+        font-weight: bold;
+        border-bottom: 1px solid #313244;
+        margin: 10px 0;
+        padding-bottom: 5px;
+      }
+      .cmd {
+        color: #89dceb;
+      }
+      .data {
+        color: #6c7086;
+      }
+    </style>
+  </head>
+  <body>
+    <h1>🔬 BOSSA Protocol EXACT Byte-Level Comparison</h1>
+    <p class="subtitle">
+      Line-by-line verification: Samba.cpp → Bossa.js byte translation must be
+      100% identical
+    </p>
+
+    <div class="controls">
+      <button onclick="runExactTest()">▶ Run EXACT Protocol Test</button>
+    </div>
+
+    <div id="output">Click "Run EXACT Protocol Test" to start...</div>
+
+    <script type="module">
+      import { Bossa } from "../src/client/services/protocols/Bossa.js";
+
+      function log(msg, cls = "") {
+        const el = document.getElementById("output");
+        if (cls) {
+          el.innerHTML += `<span class="${cls}">${escapeHtml(msg)}</span>\n`;
+        } else {
+          el.innerHTML += escapeHtml(msg) + "\n";
+        }
+        el.scrollTop = el.scrollHeight;
+      }
+
+      function escapeHtml(str) {
+        return String(str)
+          .replace(/&/g, "&amp;")
+          .replace(/</g, "&lt;")
+          .replace(/>/g, "&gt;");
+      }
+
+      /**
+       * EXACT Expected Commands from Samba.cpp
+       *
+       * Source of Truth: ArduinoCore-renesas/extras/uno-r4-wifi-fwuploader-plugin/sam-ba/Samba.cpp
+       *
+       * For a 63KB firmware with 2048-byte chunks (31 chunks):
+       */
+      function getExpectedSequence(firmwareSize, chunkSize = 2048) {
+        const SRAM_OFFSET = 0x34; // From Samba.cpp: copyOffset = 0x34
+        const sequence = [];
+
+        // ===== HANDSHAKE (Samba.cpp connect() method) =====
+        // Samba.cpp line ~100: writeCommand("N#")
+        sequence.push({
+          cmd: "N#",
+          expect: /^\n\r/,
+          desc: "Normal mode - wakes bootloader",
+        });
+
+        // Samba.cpp line ~110: writeCommand("V#")
+        sequence.push({
+          cmd: "V#",
+          expect: /Arduino.*Bootloader/i,
+          desc: "Version query",
+        });
+
+        // Samba.cpp line ~120: writeCommand("I#")
+        sequence.push({
+          cmd: "I#",
+          expect: /ARDUINO/i,
+          desc: "Device info (optional)",
+        });
+
+        // ===== ERASE (Samba.cpp erase() method) =====
+        // Samba.cpp line ~200: writeCommand("X%08X#", address)
+        sequence.push({
+          cmd: "X00000000#",
+          expect: /^X/,
+          desc: "Erase flash from 0x0",
+        });
+
+        // ===== WRITE CHUNKS =====
+        const numChunks = Math.ceil(firmwareSize / chunkSize);
+
+        for (let i = 0; i < numChunks; i++) {
+          const thisChunkSize = Math.min(
+            chunkSize,
+            firmwareSize - i * chunkSize
+          );
+          const flashAddr = i * chunkSize;
+
+          const sramHex = SRAM_OFFSET.toString(16).padStart(8, "0");
+          const flashHex = flashAddr.toString(16).padStart(8, "0");
+          const sizeHex = thisChunkSize.toString(16).padStart(8, "0");
+
+          // Samba.cpp write() method:
+          // 1. writeCommand("S%08X,%08X#", sramOffset, size)
+          sequence.push({
+            cmd: `S${sramHex},${sizeHex}#`,
+            expect: null, // No response for S command
+            desc: `Chunk ${i + 1}/${numChunks}: SRAM write header`,
+            binary: thisChunkSize,
+          });
+
+          // 2. writeBinary(data, size)  - sends raw bytes
+          sequence.push({
+            cmd: `[BINARY:${thisChunkSize}]`,
+            expect: null,
+            desc: `Chunk ${i + 1}/${numChunks}: Send ${thisChunkSize} bytes`,
+          });
+
+          // Samba.cpp writeBuffer() method:
+          // 3. writeCommand("Y%08X,0#", copyOffset) - set source
+          sequence.push({
+            cmd: `Y${sramHex},0#`,
+            expect: /^Y/,
+            desc: `Chunk ${i + 1}/${numChunks}: Y set copyOffset`,
+          });
+
+          // 4. writeCommand("Y%08X,%08X#", flashAddr, size) - do flash write
+          sequence.push({
+            cmd: `Y${flashHex},${sizeHex}#`,
+            expect: /^Y/,
+            desc: `Chunk ${i + 1}/${numChunks}: Y flash write @ 0x${flashHex}`,
+          });
+        }
+
+        // ===== RESET =====
+        // Samba.cpp reset() method: writeCommand("K#")
+        sequence.push({ cmd: "K#", expect: /^K/, desc: "System reset" });
+
+        return sequence;
+      }
+
+      /**
+       * Mock port that captures EXACT bytes sent
+       */
+      class ExactMockPort {
+        constructor() {
+          this.capturedCommands = [];
+          this.rxQueue = [];
+          this.pendingBinary = 0;
+          this.currentBinaryCmd = null;
+        }
+
+        getInfo() {
+          return { usbVendorId: 0x2341, usbProductId: 0x006d };
+        }
+        async open() {}
+        async close() {}
+        async setSignals() {}
+
+        async queueResponse(bytes) {
+          await new Promise((r) => setTimeout(r, 1));
+          this.rxQueue.push(new Uint8Array(bytes));
+        }
+
+        processCommand(cmdStr) {
+          // N# - Normal mode
+          if (cmdStr === "N#") {
+            this.queueResponse([0x0a, 0x0d]);
+            return;
+          }
+
+          // V# - Version
+          if (cmdStr === "V#") {
+            const v = "Arduino Bootloader (SAM-BA extended) D21\n\r";
+            this.queueResponse(new TextEncoder().encode(v));
+            return;
+          }
+
+          // I# - Info
+          if (cmdStr === "I#") {
+            this.queueResponse(new TextEncoder().encode("ARDUINO\n\r"));
+            return;
+          }
+
+          // X# - Erase
+          if (cmdStr.match(/^X[0-9a-fA-F]+#$/)) {
+            this.queueResponse([0x58, 0x0a, 0x0d]);
+            return;
+          }
+
+          // S# - SRAM write header (no response)
+          const sMatch = cmdStr.match(/^S([0-9a-fA-F]+),([0-9a-fA-F]+)#$/);
+          if (sMatch) {
+            this.pendingBinary = parseInt(sMatch[2], 16);
+            this.currentBinaryCmd = cmdStr;
+            return;
+          }
+
+          // Y# - Flash operations
+          if (cmdStr.match(/^Y[0-9a-fA-F]+,[0-9a-fA-F]+#$/)) {
+            this.queueResponse([0x59, 0x0a, 0x0d]);
+            return;
+          }
+
+          // K# - Reset
+          if (cmdStr === "K#") {
+            this.queueResponse([0x4b, 0x0a, 0x0d]);
+            return;
+          }
+        }
+
+        get readable() {
+          const self = this;
+          return {
+            getReader() {
+              return {
+                async read() {
+                  const start = Date.now();
+                  while (self.rxQueue.length === 0) {
+                    if (Date.now() - start > 5000) return { done: true };
+                    await new Promise((r) => setTimeout(r, 5));
+                  }
+                  return { value: self.rxQueue.shift(), done: false };
+                },
+                releaseLock() {},
+                async cancel() {},
+              };
+            },
+          };
+        }
+
+        get writable() {
+          const self = this;
+          return {
+            getWriter() {
+              return {
+                ready: Promise.resolve(),
+                async write(data) {
+                  const bytes = new Uint8Array(data);
+
+                  // Binary data for S command
+                  if (self.pendingBinary > 0) {
+                    self.capturedCommands.push({
+                      type: "binary",
+                      size: bytes.length,
+                      parentCmd: self.currentBinaryCmd,
+                    });
+                    self.pendingBinary -= bytes.length;
+                    return;
+                  }
+
+                  // Text command
+                  const cmdStr = new TextDecoder().decode(bytes);
+                  self.capturedCommands.push({
+                    type: "command",
+                    cmd: cmdStr,
+                    bytes: Array.from(bytes),
+                    hex: Array.from(bytes)
+                      .map((b) => b.toString(16).padStart(2, "0"))
+                      .join(" "),
+                  });
+                  self.processCommand(cmdStr);
+                },
+                releaseLock() {},
+              };
+            },
+          };
+        }
+      }
+
+      window.runExactTest = async function () {
+        const output = document.getElementById("output");
+        output.innerHTML = "";
+
+        const firmwareSize = 63 * 1024; // 63KB like demo_plotter
+        const chunkSize = 2048;
+        const numChunks = Math.ceil(firmwareSize / chunkSize);
+
+        log("═".repeat(80), "header");
+        log("EXACT BYTE-LEVEL PROTOCOL VERIFICATION", "header");
+        log("═".repeat(80), "header");
+        log("");
+        log(`Firmware size: ${firmwareSize} bytes (${firmwareSize / 1024} KB)`);
+        log(`Chunk size: ${chunkSize} bytes`);
+        log(`Expected chunks: ${numChunks}`);
+        log("");
+
+        // Get expected sequence
+        const expected = getExpectedSequence(firmwareSize, chunkSize);
+        log(`Expected protocol sequence: ${expected.length} steps`, "info");
+        log("");
+
+        // Run Bossa.js
+        log("─".repeat(80));
+        log("RUNNING BOSSA.JS WITH MOCK PORT...", "header");
+        log("─".repeat(80));
+
+        const mockPort = new ExactMockPort();
+        const bossa = new Bossa(mockPort);
+
+        try {
+          await mockPort.open();
+          await bossa.connect();
+
+          // Handshake
+          await bossa.hello({ attempts: 1, proceedOnFailure: true });
+
+          // Erase
+          await bossa.chipErase(0);
+
+          // Write firmware
+          const firmware = new Uint8Array(firmwareSize);
+          for (let i = 0; i < firmware.length; i++) firmware[i] = i & 0xff;
+
+          const SRAM_OFFSET = 0x34;
+          let flashAddr = 0;
+
+          for (let i = 0; i < firmware.length; i += chunkSize) {
+            const chunk = firmware.subarray(
+              i,
+              Math.min(i + chunkSize, firmware.length)
+            );
+            await bossa.writeBinary(SRAM_OFFSET, chunk);
+            await bossa.writeBuffer(SRAM_OFFSET, flashAddr, chunk.length);
+            flashAddr += chunk.length;
+          }
+
+          // Reset
+          await new Promise((r) => setTimeout(r, 50));
+          await bossa.reset();
+          await bossa.disconnect();
+        } catch (e) {
+          log(`ERROR: ${e.message}`, "fail");
+          return;
+        }
+
+        log(
+          `Captured ${mockPort.capturedCommands.length} commands from Bossa.js`,
+          "info"
+        );
+        log("");
+
+        // ===== EXACT COMPARISON =====
+        log("═".repeat(80), "header");
+        log("EXACT BYTE-BY-BYTE COMPARISON", "header");
+        log("═".repeat(80), "header");
+        log("");
+
+        let expIdx = 0;
+        let actIdx = 0;
+        let pass = 0;
+        let fail = 0;
+
+        while (expIdx < expected.length) {
+          const exp = expected[expIdx];
+          const act = mockPort.capturedCommands[actIdx];
+
+          // Special handling for binary data
+          if (exp.binary) {
+            // This is a S command followed by binary
+            // Check the S command
+            if (!act || act.type !== "command") {
+              log(`[${expIdx}] EXPECTED: ${exp.cmd}`, "fail");
+              log(`         ACTUAL: (missing or wrong type)`, "fail");
+              fail++;
+              expIdx++;
+              continue;
+            }
+
+            // Verify S command bytes EXACTLY
+            const expBytes = exp.cmd;
+            const actCmd = act.cmd;
+
+            if (expBytes === actCmd) {
+              log(`[${expIdx}] ✓ ${exp.cmd}`, "pass");
+              log(`        ${exp.desc}`, "data");
+              pass++;
+            } else {
+              log(`[${expIdx}] ✗ MISMATCH`, "fail");
+              log(`        Expected: ${expBytes}`, "fail");
+              log(`        Actual:   ${actCmd}`, "fail");
+              fail++;
+            }
+
+            expIdx++;
+            actIdx++;
+
+            // Now check the binary data entries
+            const nextExp = expected[expIdx];
+            if (nextExp && nextExp.cmd.startsWith("[BINARY:")) {
+              // Count binary bytes captured
+              let totalBinary = 0;
+              while (
+                actIdx < mockPort.capturedCommands.length &&
+                mockPort.capturedCommands[actIdx].type === "binary"
+              ) {
+                totalBinary += mockPort.capturedCommands[actIdx].size;
+                actIdx++;
+              }
+
+              if (totalBinary === exp.binary) {
+                log(`[${expIdx}] ✓ [BINARY:${totalBinary}] bytes sent`, "pass");
+                pass++;
+              } else {
+                log(
+                  `[${expIdx}] ✗ Binary mismatch: expected ${exp.binary}, got ${totalBinary}`,
+                  "fail"
+                );
+                fail++;
+              }
+              expIdx++;
+            }
+            continue;
+          }
+
+          // Regular command comparison
+          if (!act || act.type !== "command") {
+            log(`[${expIdx}] EXPECTED: ${exp.cmd}`, "fail");
+            log(`         ACTUAL: (missing)`, "fail");
+            fail++;
+            expIdx++;
+            continue;
+          }
+
+          const expCmd = exp.cmd;
+          const actCmd = act.cmd;
+
+          if (expCmd === actCmd) {
+            log(`[${expIdx}] ✓ ${expCmd}`, "pass");
+            log(`        ${exp.desc}`, "data");
+            pass++;
+          } else {
+            log(`[${expIdx}] ✗ MISMATCH`, "fail");
+            log(`        Expected: "${expCmd}"`, "fail");
+            log(`        Actual:   "${actCmd}"`, "fail");
+            log(
+              `        Expected hex: ${Array.from(
+                new TextEncoder().encode(expCmd)
+              )
+                .map((b) => b.toString(16).padStart(2, "0"))
+                .join(" ")}`,
+              "data"
+            );
+            log(`        Actual hex:   ${act.hex}`, "data");
+            fail++;
+          }
+
+          expIdx++;
+          actIdx++;
+        }
+
+        // Summary
+        log("");
+        log("═".repeat(80), "header");
+        log("SUMMARY", "header");
+        log("═".repeat(80), "header");
+        log("");
+        log(`Expected steps: ${expected.length}`);
+        log(`Commands captured: ${mockPort.capturedCommands.length}`);
+        log(`PASSED: ${pass}`, pass > 0 ? "pass" : "");
+        log(`FAILED: ${fail}`, fail > 0 ? "fail" : "pass");
+        log("");
+
+        if (fail === 0) {
+          log(
+            "✅ PERFECT MATCH - Bossa.js generates EXACT same bytes as Samba.cpp",
+            "pass"
+          );
+        } else {
+          log(
+            "❌ MISMATCH DETECTED - Bossa.js does NOT match Samba.cpp",
+            "fail"
+          );
+          log("");
+          log(
+            "This means the protocol implementation has bugs that need fixing.",
+            "warn"
+          );
+        }
+
+        log("═".repeat(80), "header");
+      };
+    </script>
+  </body>
+</html>

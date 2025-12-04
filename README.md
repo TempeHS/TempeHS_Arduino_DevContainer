@@ -61,10 +61,12 @@ See [How to Ask Copilot Questions](docs/howto/copilot-questions.md) for tips on 
 
 ### Hardware Requirements
 
-- Arduino Uno R4 WiFi (or compatible)
+- **Arduino Uno R4 WiFi** ✅ (tested and working via Web Serial)
 - Seeed Grove Base Shield
 - Grove sensors from TempeHS collection
 - USB-C cable
+
+> **Note:** `random()` is broken on the R4 WiFi core. Use `demo_r4wifi_plotter` instead of `demo_plotter` for plotter demos.
 
 ## 🔧 DevContainer Features
 
@@ -107,5 +109,5 @@ See [CONTRIBUTING.md](docs/CONTRIBUTING.md) for guidelines on:
 
 ---
 
-**Last Updated:** 2025-11-17  
+**Last Updated:** 2025-12-04  
 **Maintained by:** TempeHS Arduino Development Team

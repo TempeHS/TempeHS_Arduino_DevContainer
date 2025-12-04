@@ -33,5 +33,7 @@
     "SQL": false
   },
   "chat.agent.enabled": true,
-  "github.copilot.chat.participant.alwaysInclude": [""]
+  "github.copilot.chat.participant.alwaysInclude": [
+    ".github/arduino-bridge-instructions.md"
+  ]
 }

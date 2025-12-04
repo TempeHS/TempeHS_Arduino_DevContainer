@@ -4,48 +4,100 @@
 
 - We can reliably put the UNO R4 WiFi into bootloader mode (LED flashing)
 - The bootloader stays active and doesn't timeout
-- **SOLVED**: The correct baud rate is **230400**, not 115200 or 921600!
+- **SOLVED**: The correct baud rate is **230400**, not 115200 or 921200!
 
-## 🆕 KEY FIX: Flash Programming Protocol (Dec 2025)
+---
+
+## 🚨 CRITICAL BUG FIX (Latest - Version 1.0.5)
 
 ### The Problem
 
-Upload completed successfully (handshake OK, 62900 bytes written) but firmware didn't persist across reboot.
+Upload completed successfully (62900 bytes written, no errors) but:
 
-### Root Cause: Incorrect Y Command Usage
+- LED never blinks after upload
+- Firmware doesn't persist to flash
+- Rebooting runs old firmware
 
-From analyzing BOSSA source code (shumatech/BOSSA Samba.cpp), the `Y` command has **two stages**:
+### Root Cause: BOSSA Y Command ACK Handling
+
+Deep-diving into Arduino's BOSSA source (`arduino/BOSSA/src/Samba.cpp` lines 651-680), the Y command protocol requires **waiting for acknowledgment**:
 
 ```cpp
-// From Samba.cpp line 608-627
 void Samba::writeBuffer(uint32_t src_addr, uint32_t dst_addr, uint32_t size)
 {
-    // Step 1: Set source address (SRAM buffer)
-    snprintf(cmd, "Y%08X,0#", src_addr);  // Y[src],0#
+    // Step 1: Set source address
+    snprintf(cmd, "Y%08X,0#", src_addr);
+    _port->write(cmd, l);
+    _port->read(cmd, 3); // ← WAITS FOR "Y\n\r" ACK!
 
-    // Step 2: Execute copy to flash
-    snprintf(cmd, "Y%08X,%08X#", dst_addr, size);  // Y[dst],[size]#
+    // Step 2: Copy to flash
+    snprintf(cmd, "Y%08X,%08X#", dst_addr, size);
+    _port->write(cmd, l);
+    _port->read(cmd, 3); // ← WAITS FOR "Y\n\r" ACK!
 }
 ```
 
-### Previous Bug
+**Our bug**: We only had `await this.delay(2)` instead of reading the response!
 
-We were sending:
+The bootloader expects us to consume the "Y\n\r" acknowledgment before the next command. Without reading it:
 
-- `S[flash_addr],[size]#` - Wrong! This writes to wrong SRAM location
-- `Y[flash_addr],[size]#` - This tries to copy from wrong source
+1. ACK data sits in buffer
+2. Next S command gets mixed with stale ACK
+3. Command parsing fails
+4. Flash write never actually happens
+
+### Fix Applied (v1.0.5-y-ack-fix)
+
+```javascript
+// Step 1: Y[src],0# - set source
+await this.writeCommand(`Y${srcHex},0#`);
+await this.readUntilTerminator({ timeout: 100 }); // ← NOW READS ACK
+
+// Step 2: Y[dst],[size]# - write to flash
+await this.writeCommand(`Y${dstHex},${sizeHex}#`);
+await this.readUntilTerminator({ timeout: 5000 }); // ← NOW WAITS FOR FLASH COMPLETE
+```
+
+### Key Insight: NullFlash Class
+
+BOSSA uses `NullFlash` class for devices where the bootloader handles flash internally (like R4 WiFi). From `NullFlash.cpp`:
+
+```cpp
+void NullFlash::writeBuffer(uint32_t dst_addr, uint32_t size)
+{
+    if (_eraseAuto) erase(dst_addr, size);
+    Flash::writeBuffer(dst_addr, size);  // ← Delegates to base class
+}
+```
+
+The base `Flash::writeBuffer()` uses `Samba::writeBuffer()` which sends two Y commands. The R4 bootloader implements SAM-BA protocol internally and handles the actual Renesas flash operations.
+
+---
+
+## 🆕 Previous Fix: Flash Programming Protocol (Dec 2025)
+
+### Earlier Problem
+
+Writing to wrong SRAM addresses.
+
+### Earlier Root Cause
+
+The `Y` command has **two stages**:
+
+```cpp
+// From Samba.cpp
+void Samba::writeBuffer(uint32_t src_addr, uint32_t dst_addr, uint32_t size)
+{
+    snprintf(cmd, "Y%08X,0#", src_addr);  // Step 1: Set source
+    snprintf(cmd, "Y%08X,%08X#", dst_addr, size);  // Step 2: Copy to flash
+}
+```
 
 ### Correct Sequence
 
 1. `S[sram_buffer],[size]#` + binary - Write to SRAM buffer at 0x20001000
-2. `Y[sram_buffer],0#` - Set source address
-3. `Y[flash_addr],[size]#` - Copy from SRAM to flash
-
-### Fix Applied
-
-- BOSSAStrategy.js now uses fixed SRAM buffer addresses (0x20001000, 0x20001100)
-- Bossa.js writeBuffer() sends the two-stage Y command
-- Double-buffering alternates between two SRAM buffers for efficiency
+2. `Y[sram_buffer],0#` - Set source address (+ wait for ACK!)
+3. `Y[flash_addr],[size]#` - Copy from SRAM to flash (+ wait for ACK!)
 
 ## ✅ KEY DISCOVERY FROM WIRESHARK (Dec 3, 2025)
 

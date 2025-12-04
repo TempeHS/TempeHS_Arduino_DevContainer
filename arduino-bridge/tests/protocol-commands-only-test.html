@@ -1,0 +1,394 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>BOSSA Protocol Commands-Only Test</title>
+    <style>
+      * {
+        box-sizing: border-box;
+      }
+      body {
+        font-family: "Consolas", "Monaco", monospace;
+        margin: 0;
+        padding: 20px;
+        background: #1e1e2e;
+        color: #cdd6f4;
+      }
+      h1 {
+        color: #89b4fa;
+        margin-bottom: 5px;
+      }
+      .subtitle {
+        color: #a6adc8;
+        margin-bottom: 20px;
+        font-size: 14px;
+      }
+      .controls {
+        background: #313244;
+        padding: 15px;
+        border-radius: 8px;
+        margin-bottom: 20px;
+      }
+      button {
+        background: #89b4fa;
+        color: #1e1e2e;
+        border: none;
+        padding: 10px 20px;
+        border-radius: 4px;
+        cursor: pointer;
+        font-weight: bold;
+      }
+      button:hover {
+        background: #b4befe;
+      }
+      #output {
+        background: #11111b;
+        padding: 15px;
+        border-radius: 8px;
+        white-space: pre-wrap;
+        font-size: 11px;
+        max-height: 800px;
+        overflow-y: auto;
+      }
+      .pass {
+        color: #a6e3a1;
+      }
+      .fail {
+        color: #f38ba8;
+      }
+      .warn {
+        color: #f9e2af;
+      }
+      .info {
+        color: #89b4fa;
+      }
+      .header {
+        color: #cba6f7;
+        font-weight: bold;
+        border-bottom: 1px solid #313244;
+        margin: 10px 0;
+        padding-bottom: 5px;
+      }
+      .cmd {
+        color: #89dceb;
+      }
+      .data {
+        color: #6c7086;
+      }
+    </style>
+  </head>
+  <body>
+    <h1>🔬 BOSSA Protocol COMMANDS-ONLY Comparison</h1>
+    <p class="subtitle">
+      Compares only the protocol command strings (ignores binary data payload
+      display differences)
+    </p>
+
+    <div class="controls">
+      <button onclick="runCommandTest()">▶ Run Commands-Only Test</button>
+    </div>
+
+    <div id="output">
+      Click "Run Commands-Only Test" to start... This test extracts ONLY the
+      protocol commands (N#, V#, S#, Y#, K# etc.) and compares them
+      byte-for-byte between Samba.cpp reference and Bossa.js actual. Binary data
+      payloads are verified by SIZE only, not content display format.
+    </div>
+
+    <script type="module">
+      import { Bossa } from "../src/client/services/protocols/Bossa.js";
+
+      function log(msg, cls = "") {
+        const el = document.getElementById("output");
+        if (cls) {
+          el.innerHTML += `<span class="${cls}">${escapeHtml(msg)}</span>\n`;
+        } else {
+          el.innerHTML += escapeHtml(msg) + "\n";
+        }
+        el.scrollTop = el.scrollHeight;
+      }
+
+      function escapeHtml(str) {
+        return String(str)
+          .replace(/&/g, "&amp;")
+          .replace(/</g, "&lt;")
+          .replace(/>/g, "&gt;");
+      }
+
+      /**
+       * Generate EXPECTED command sequence from Samba.cpp
+       *
+       * Source: ArduinoCore-renesas/extras/uno-r4-wifi-fwuploader-plugin/sam-ba/Samba.cpp
+       */
+      function getExpectedCommands(firmwareSize, chunkSize = 2048) {
+        const SRAM_OFFSET = 0x34;
+        const commands = [];
+
+        // Handshake
+        commands.push("N#"); // Normal mode
+        commands.push("V#"); // Version
+        commands.push("I#"); // Info
+
+        // Erase
+        commands.push("X00000000#"); // Erase from 0x0
+
+        // Write chunks
+        const numChunks = Math.ceil(firmwareSize / chunkSize);
+
+        for (let i = 0; i < numChunks; i++) {
+          const thisChunkSize = Math.min(
+            chunkSize,
+            firmwareSize - i * chunkSize
+          );
+          const flashAddr = i * chunkSize;
+
+          const sramHex = SRAM_OFFSET.toString(16).padStart(8, "0");
+          const flashHex = flashAddr.toString(16).padStart(8, "0");
+          const sizeHex = thisChunkSize.toString(16).padStart(8, "0");
+
+          // S command - SRAM write header (followed by binary)
+          commands.push(`S${sramHex},${sizeHex}#`);
+          commands.push(`[BINARY:${thisChunkSize}]`); // Placeholder for binary
+
+          // Y commands - flash write
+          commands.push(`Y${sramHex},0#`); // Set copy offset
+          commands.push(`Y${flashHex},${sizeHex}#`); // Write to flash
+        }
+
+        // Reset
+        commands.push("K#");
+
+        return commands;
+      }
+
+      /**
+       * Mock port that captures exact commands
+       */
+      class CommandCaptureMock {
+        constructor() {
+          this.commands = [];
+          this.rxQueue = [];
+          this.pendingBinary = 0;
+          this.currentBinaryTotal = 0;
+        }
+
+        getInfo() {
+          return { usbVendorId: 0x2341, usbProductId: 0x006d };
+        }
+        async open() {}
+        async close() {}
+        async setSignals() {}
+
+        queueResponse(bytes) {
+          setTimeout(() => this.rxQueue.push(new Uint8Array(bytes)), 1);
+        }
+
+        processCommand(cmdStr) {
+          if (cmdStr === "N#") {
+            this.queueResponse([0x0a, 0x0d]);
+          } else if (cmdStr === "V#") {
+            this.queueResponse(
+              new TextEncoder().encode(
+                "Arduino Bootloader (SAM-BA extended) D21\n\r"
+              )
+            );
+          } else if (cmdStr === "I#") {
+            this.queueResponse(new TextEncoder().encode("ARDUINO\n\r"));
+          } else if (cmdStr.match(/^X[0-9a-fA-F]+#$/)) {
+            this.queueResponse([0x58, 0x0a, 0x0d]);
+          } else if (cmdStr.match(/^S([0-9a-fA-F]+),([0-9a-fA-F]+)#$/)) {
+            const match = cmdStr.match(/^S([0-9a-fA-F]+),([0-9a-fA-F]+)#$/);
+            this.pendingBinary = parseInt(match[2], 16);
+            this.currentBinaryTotal = 0;
+            // No response for S command
+          } else if (cmdStr.match(/^Y[0-9a-fA-F]+,[0-9a-fA-F]+#$/)) {
+            this.queueResponse([0x59, 0x0a, 0x0d]);
+          } else if (cmdStr === "K#") {
+            this.queueResponse([0x4b, 0x0a, 0x0d]);
+          }
+        }
+
+        get readable() {
+          const self = this;
+          return {
+            getReader() {
+              return {
+                async read() {
+                  const start = Date.now();
+                  while (self.rxQueue.length === 0) {
+                    if (Date.now() - start > 5000) return { done: true };
+                    await new Promise((r) => setTimeout(r, 5));
+                  }
+                  return { value: self.rxQueue.shift(), done: false };
+                },
+                releaseLock() {},
+                async cancel() {},
+              };
+            },
+          };
+        }
+
+        get writable() {
+          const self = this;
+          return {
+            getWriter() {
+              return {
+                ready: Promise.resolve(),
+                async write(data) {
+                  const bytes = new Uint8Array(data);
+
+                  // Binary data for S command
+                  if (self.pendingBinary > 0) {
+                    self.currentBinaryTotal += bytes.length;
+                    if (self.currentBinaryTotal >= self.pendingBinary) {
+                      // All binary received for this S command
+                      self.commands.push(`[BINARY:${self.currentBinaryTotal}]`);
+                      self.pendingBinary = 0;
+                      self.currentBinaryTotal = 0;
+                    }
+                    return;
+                  }
+
+                  // Text command
+                  const cmdStr = new TextDecoder().decode(bytes);
+                  self.commands.push(cmdStr);
+                  self.processCommand(cmdStr);
+                },
+                releaseLock() {},
+              };
+            },
+          };
+        }
+      }
+
+      window.runCommandTest = async function () {
+        const output = document.getElementById("output");
+        output.innerHTML = "";
+
+        const firmwareSize = 63 * 1024; // 63KB
+        const chunkSize = 2048;
+        const numChunks = Math.ceil(firmwareSize / chunkSize);
+
+        log("═".repeat(80), "header");
+        log("PROTOCOL COMMANDS-ONLY COMPARISON", "header");
+        log("═".repeat(80), "header");
+        log("");
+        log(`Firmware: ${firmwareSize} bytes (${firmwareSize / 1024} KB)`);
+        log(`Chunks: ${numChunks} × ${chunkSize} bytes`);
+        log("");
+
+        // Get expected command sequence
+        const expected = getExpectedCommands(firmwareSize, chunkSize);
+        log(`Expected commands: ${expected.length}`, "info");
+
+        // Run Bossa.js and capture commands
+        log("Running Bossa.js...", "info");
+        const mockPort = new CommandCaptureMock();
+        const bossa = new Bossa(mockPort);
+
+        try {
+          await mockPort.open();
+          await bossa.connect();
+          await bossa.hello({ attempts: 1, proceedOnFailure: true });
+          await bossa.chipErase(0);
+
+          const firmware = new Uint8Array(firmwareSize);
+          for (let i = 0; i < firmware.length; i++) firmware[i] = i & 0xff;
+
+          const SRAM_OFFSET = 0x34;
+          let flashAddr = 0;
+
+          for (let i = 0; i < firmware.length; i += chunkSize) {
+            const chunk = firmware.subarray(
+              i,
+              Math.min(i + chunkSize, firmware.length)
+            );
+            await bossa.writeBinary(SRAM_OFFSET, chunk);
+            await bossa.writeBuffer(SRAM_OFFSET, flashAddr, chunk.length);
+            flashAddr += chunk.length;
+          }
+
+          await new Promise((r) => setTimeout(r, 50));
+          await bossa.reset();
+          await bossa.disconnect();
+        } catch (e) {
+          log(`ERROR: ${e.message}`, "fail");
+          return;
+        }
+
+        const actual = mockPort.commands;
+        log(`Captured commands: ${actual.length}`, "info");
+        log("");
+
+        // COMPARE COMMAND BY COMMAND
+        log("═".repeat(80), "header");
+        log("COMMAND-BY-COMMAND COMPARISON", "header");
+        log("═".repeat(80), "header");
+        log("");
+        log("Format: [index] EXPECTED → ACTUAL → RESULT");
+        log("─".repeat(80));
+
+        let pass = 0;
+        let fail = 0;
+        const maxLen = Math.max(expected.length, actual.length);
+
+        for (let i = 0; i < maxLen; i++) {
+          const exp = expected[i] || "(missing)";
+          const act = actual[i] || "(missing)";
+
+          // For display, truncate long binary placeholders
+          const expDisplay =
+            exp.length > 50 ? exp.substring(0, 47) + "..." : exp;
+          const actDisplay =
+            act.length > 50 ? act.substring(0, 47) + "..." : act;
+
+          if (exp === act) {
+            log(`[${String(i).padStart(3)}] ✓ ${expDisplay}`, "pass");
+            pass++;
+          } else {
+            log(`[${String(i).padStart(3)}] ✗ MISMATCH:`, "fail");
+            log(`       Expected: "${expDisplay}"`, "fail");
+            log(`       Actual:   "${actDisplay}"`, "fail");
+            fail++;
+          }
+        }
+
+        // SUMMARY
+        log("");
+        log("═".repeat(80), "header");
+        log("SUMMARY", "header");
+        log("═".repeat(80), "header");
+        log("");
+        log(`Expected: ${expected.length} commands`);
+        log(`Actual:   ${actual.length} commands`);
+        log(`Passed:   ${pass}`, pass > 0 ? "pass" : "");
+        log(`Failed:   ${fail}`, fail > 0 ? "fail" : "pass");
+        log("");
+
+        if (fail === 0) {
+          log("✅ PERFECT MATCH!", "pass");
+          log("", "pass");
+          log(
+            "Bossa.js generates EXACTLY the same protocol commands as Samba.cpp.",
+            "pass"
+          );
+          log("The protocol implementation is CORRECT.", "pass");
+        } else {
+          log("❌ MISMATCH DETECTED", "fail");
+          log("", "fail");
+          log(
+            "Bossa.js protocol commands differ from Samba.cpp source of truth.",
+            "fail"
+          );
+          log(
+            "Review the mismatches above and fix the implementation.",
+            "fail"
+          );
+        }
+
+        log("═".repeat(80), "header");
+      };
+    </script>
+  </body>
+</html>

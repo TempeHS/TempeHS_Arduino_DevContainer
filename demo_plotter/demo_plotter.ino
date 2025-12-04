@@ -5,6 +5,8 @@
   to the Arduino IDE's Serial Plotter, demonstrating how multiple variables
   can be visualized in real-time.
 
+  WARNING: random() is broken on Uno R4 WiFi - use demo_r4wifi_plotter instead
+
   @author Ben Jones
 */
 
@@ -15,8 +17,10 @@ float time = 0.0;
 
 void setup()
 {
-  Serial.begin(9600);
-  // Give the user instructions
+  pinMode(LED_BUILTIN, OUTPUT);
+  digitalWrite(LED_BUILTIN, HIGH);
+
+  Serial.begin(115200);
   Serial.println("Sine\tSquare\tTri\tRandom");
 }
 

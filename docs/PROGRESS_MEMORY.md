@@ -1,7 +1,7 @@
 # Arduino Bridge Development Progress & Memory
 
 **Date:** January 2025
-**Status:** Active Development - BOSSA Upload Fix In Progress
+**Status:** Active Development - BOSSA Upload v1.1.0 (Bootloader Source Analysis)
 
 ## 🎯 Project Goal
 
@@ -9,44 +9,68 @@ Enable flashing of Arduino hardware directly from a GitHub Codespace (or Dev Con
 
 ## 🔥 Latest Critical Fix (January 2025)
 
-### 1200bps Touch Reset - FIXED
+### BOSSA Protocol - Bootloader Source Code Analysis
 
-**Problem:** Arduino Uno R4 WiFi and MKR boards were NOT entering bootloader mode after the 1200bps touch. The device picker kept showing the same PID (0x1002 - sketch mode) instead of the bootloader PID (0x006D).
+**Version:** 1.1.0-bootloader-source-fix
 
-**Root Cause:** Our implementation used incorrect DTR/RTS signals:
+We discovered the official Arduino bootloader source code at `arduino/arduino-renesas-bootloader` and analyzed the exact protocol implementation in `src/bossa.c`. This is the AUTHORITATIVE reference for the R4 WiFi upload protocol.
 
-```javascript
-// WRONG - Our old code:
-await port.setSignals({ dataTerminalReady: false, requestToSend: true });
-await new Promise((r) => setTimeout(r, 1200)); // wait THEN close
+**Key Discoveries from `bossa.c` (lines 244-280):**
+
+1. **S Command (SRAM Write)**:
+
+   - Format: `S{addr},{size}#` + binary data
+   - The `addr` is an **OFFSET into an internal data_buffer[8192]**, NOT an absolute RAM address!
+   - `S00000034,00001000#` writes 4096 bytes starting at `data_buffer[0x34]`
+
+2. **Y Command (Flash Write) - TWO FORMS**:
+
+   ```c
+   // Form 1: Y{addr},0# (size=0) - Just sets copyOffset
+   copyOffset = addr;
+   R_SCI_UART_Write(&g_uart_ctrl, "Y\n\r", 3);  // ACK sent
+
+   // Form 2: Y{addr},{size}# (size>0) - Execute flash write
+   __disable_irq();  // CRITICAL: Interrupts disabled during write!
+   R_FLASH_LP_Write(&data_buffer[copyOffset], SKETCH_FLASH_OFFSET + addr, size);
+   __enable_irq();
+   R_SCI_UART_Write(&g_uart_ctrl, "Y\n\r", 3);  // ACK sent AFTER write
+   ```
+
+3. **Flash Offset Added Internally**:
+
+   - `SKETCH_FLASH_OFFSET = 0x4000` (16KB) for non-DFU boards
+   - So `Y00000000,00001000#` writes to **physical flash 0x4000**
+   - The G command uses absolute address: `G00004000#` jumps to user code
+
+4. **ACKs Are Always Sent**:
+   - Bootloader ALWAYS sends `"Y\n\r"` after Y commands
+   - If we timeout waiting for ACK, it's likely USB CDC buffering issues
+
+**Protocol Flow (Correct):**
+
+```
+S00000034,00001000# + [4096 bytes]   -> Write to data_buffer[0x34..0x1033]
+Y00000034,0#                          -> Set copyOffset = 0x34, ACK "Y\n\r"
+Y00000000,00001000#                   -> Write data_buffer to flash 0x4000, ACK "Y\n\r"
+...repeat with Y00001000, Y00002000, etc...
+G00004000#                            -> Jump to user code
 ```
 
-**Official Arduino Implementation (from arduino/go-serial-utils):**
+### Previous Fix: 1200bps Touch Reset
 
-```go
-// CORRECT - Official Touch1200bps():
-p, err := serial.Open(port, &serial.Mode{BaudRate: 1200})
-p.SetDTR(false)  // DTR to FALSE only, no RTS manipulation
-p.Close()        // Close IMMEDIATELY triggers reset
-time.Sleep(500 * time.Millisecond)  // Wait AFTER close
-```
+**Problem:** Arduino Uno R4 WiFi was NOT entering bootloader mode after 1200bps touch.
+
+**Root Cause:** Incorrect DTR/RTS signals. Official implementation only sets DTR=false, not RTS.
 
 **The Fix:**
 
 ```javascript
-// CORRECT - New implementation:
 await port.open({ baudRate: 1200 });
 await port.setSignals({ dataTerminalReady: false }); // DTR=false only
 await port.close(); // Close immediately triggers reset
 await new Promise((r) => setTimeout(r, 500)); // Wait after close
 ```
-
-**Key Insights:**
-
-1. Do NOT set RTS - official implementation only touches DTR
-2. DTR=false is the magic signal
-3. Port CLOSE triggers the reset (not the signal change)
-4. Wait 500ms AFTER close, not before
 
 ## 🏗️ Architecture Overview
 

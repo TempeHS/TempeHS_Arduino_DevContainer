@@ -1,0 +1,574 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>BOSSA Protocol TIMING Test</title>
+    <style>
+      * {
+        box-sizing: border-box;
+      }
+      body {
+        font-family: "Consolas", "Monaco", monospace;
+        margin: 0;
+        padding: 20px;
+        background: #1e1e2e;
+        color: #cdd6f4;
+      }
+      h1 {
+        color: #89b4fa;
+        margin-bottom: 5px;
+      }
+      .subtitle {
+        color: #a6adc8;
+        margin-bottom: 20px;
+        font-size: 14px;
+      }
+      .controls {
+        background: #313244;
+        padding: 15px;
+        border-radius: 8px;
+        margin-bottom: 20px;
+      }
+      button {
+        background: #89b4fa;
+        color: #1e1e2e;
+        border: none;
+        padding: 10px 20px;
+        border-radius: 4px;
+        cursor: pointer;
+        font-weight: bold;
+        margin-right: 10px;
+      }
+      button:hover {
+        background: #b4befe;
+      }
+      button:disabled {
+        background: #585b70;
+        cursor: not-allowed;
+      }
+      #output {
+        background: #11111b;
+        padding: 15px;
+        border-radius: 8px;
+        white-space: pre-wrap;
+        font-size: 11px;
+        max-height: 700px;
+        overflow-y: auto;
+      }
+      .pass {
+        color: #a6e3a1;
+      }
+      .fail {
+        color: #f38ba8;
+      }
+      .warn {
+        color: #f9e2af;
+      }
+      .info {
+        color: #89b4fa;
+      }
+      .time {
+        color: #fab387;
+      }
+      .header {
+        color: #cba6f7;
+        font-weight: bold;
+        border-bottom: 1px solid #313244;
+        margin: 10px 0;
+        padding-bottom: 5px;
+      }
+      .progress {
+        background: #313244;
+        border-radius: 4px;
+        height: 20px;
+        margin: 10px 0;
+        overflow: hidden;
+      }
+      .progress-bar {
+        background: #89b4fa;
+        height: 100%;
+        transition: width 0.3s;
+      }
+      #progressText {
+        margin-top: 5px;
+        color: #a6adc8;
+      }
+    </style>
+  </head>
+  <body>
+    <h1>⏱️ BOSSA Protocol TIMING Test</h1>
+    <p class="subtitle">
+      Simulates REAL timing delays to identify if timing is causing upload
+      failures
+    </p>
+
+    <div class="controls">
+      <button id="btnRun" onclick="runTimingTest()">
+        ▶ Run Timing Test (63KB firmware)
+      </button>
+      <button onclick="runTimingTest(55)">▶ Test 55KB (demo_servo size)</button>
+      <button onclick="runTimingTest(52)">▶ Test 52KB (demo_blink size)</button>
+    </div>
+
+    <div class="progress">
+      <div class="progress-bar" id="progressBar" style="width: 0%"></div>
+    </div>
+    <div id="progressText">Ready</div>
+
+    <div id="output">
+      This test simulates REAL timing: • Timeouts wait the FULL duration (e.g.,
+      5 second timeout = 5 second wait on failure) • Flash write delays match
+      actual hardware (~20ms per 2KB chunk) • Shows exact timestamps for every
+      operation • Identifies where time is being spent Click a button to
+      start...
+    </div>
+
+    <script type="module">
+      import { Bossa } from "../src/client/services/protocols/Bossa.js";
+
+      let startTime = 0;
+
+      function timestamp() {
+        const elapsed = Date.now() - startTime;
+        const sec = Math.floor(elapsed / 1000);
+        const ms = elapsed % 1000;
+        return `[${String(sec).padStart(3)}.${String(ms).padStart(3, "0")}]`;
+      }
+
+      function log(msg, cls = "") {
+        const el = document.getElementById("output");
+        const ts = startTime ? timestamp() : "[-----]";
+        if (cls) {
+          el.innerHTML += `<span class="time">${ts}</span> <span class="${cls}">${escapeHtml(
+            msg
+          )}</span>\n`;
+        } else {
+          el.innerHTML += `<span class="time">${ts}</span> ${escapeHtml(
+            msg
+          )}\n`;
+        }
+        el.scrollTop = el.scrollHeight;
+      }
+
+      function progress(pct, text) {
+        document.getElementById("progressBar").style.width = pct + "%";
+        document.getElementById("progressText").textContent = text;
+      }
+
+      function escapeHtml(str) {
+        return String(str)
+          .replace(/&/g, "&amp;")
+          .replace(/</g, "&lt;")
+          .replace(/>/g, "&gt;");
+      }
+
+      /**
+       * Mock port with REAL timing simulation
+       *
+       * Timing based on actual R4 WiFi bootloader behavior:
+       * - N# response: ~1ms
+       * - V# response: ~10ms
+       * - I# response: ~5ms
+       * - X# (erase): ~50ms for small, up to 500ms for large
+       * - Y# (flash write): ~20ms per 2KB chunk (blocking)
+       * - K# (reset): immediate, then board resets
+       */
+      class TimingMockPort {
+        constructor() {
+          this.rxQueue = [];
+          this.pendingBinary = 0;
+          this.totalBinaryReceived = 0;
+          this.chunkCount = 0;
+          this.closed = false;
+
+          // Timing configuration (milliseconds)
+          this.timing = {
+            nResponse: 2, // N# ACK delay
+            vResponse: 10, // V# version response
+            iResponse: 5, // I# info response
+            xErase: 50, // X# erase (varies by size)
+            ySetOffset: 2, // Y offset,0# ACK
+            yFlashWrite: 20, // Y flash write ACK (blocking)
+            kReset: 2, // K# reset ACK
+            binaryTransmit: 90, // Time to transmit 2KB @ 230400 baud
+          };
+        }
+
+        getInfo() {
+          return { usbVendorId: 0x2341, usbProductId: 0x006d };
+        }
+        async open() {
+          this.closed = false;
+        }
+        async close() {
+          this.closed = true;
+        }
+        async setSignals() {}
+
+        async queueResponse(bytes, delayMs) {
+          await new Promise((r) => setTimeout(r, delayMs));
+          if (!this.closed) {
+            this.rxQueue.push(new Uint8Array(bytes));
+          }
+        }
+
+        async processCommand(cmdStr) {
+          // N# - Normal mode
+          if (cmdStr === "N#") {
+            await this.queueResponse([0x0a, 0x0d], this.timing.nResponse);
+            return;
+          }
+
+          // V# - Version
+          if (cmdStr === "V#") {
+            const v = "Arduino Bootloader (SAM-BA extended) D21\n\r";
+            await this.queueResponse(
+              new TextEncoder().encode(v),
+              this.timing.vResponse
+            );
+            return;
+          }
+
+          // I# - Info
+          if (cmdStr === "I#") {
+            await this.queueResponse(
+              new TextEncoder().encode("ARDUINO\n\r"),
+              this.timing.iResponse
+            );
+            return;
+          }
+
+          // X# - Erase
+          if (cmdStr.match(/^X[0-9a-fA-F]+#$/)) {
+            await this.queueResponse([0x58, 0x0a, 0x0d], this.timing.xErase);
+            return;
+          }
+
+          // S# - SRAM write header (no response, binary follows)
+          const sMatch = cmdStr.match(/^S([0-9a-fA-F]+),([0-9a-fA-F]+)#$/);
+          if (sMatch) {
+            this.pendingBinary = parseInt(sMatch[2], 16);
+            this.totalBinaryReceived = 0;
+            return;
+          }
+
+          // Y# - Flash operations
+          const yMatch = cmdStr.match(/^Y([0-9a-fA-F]+),([0-9a-fA-F]+)#$/);
+          if (yMatch) {
+            const size = parseInt(yMatch[2], 16);
+            if (size === 0) {
+              // Y offset,0# - set copy offset (fast)
+              await this.queueResponse(
+                [0x59, 0x0a, 0x0d],
+                this.timing.ySetOffset
+              );
+            } else {
+              // Y addr,size# - actual flash write (BLOCKING - slow!)
+              this.chunkCount++;
+              await this.queueResponse(
+                [0x59, 0x0a, 0x0d],
+                this.timing.yFlashWrite
+              );
+            }
+            return;
+          }
+
+          // K# - Reset
+          if (cmdStr === "K#") {
+            await this.queueResponse([0x4b, 0x0a, 0x0d], this.timing.kReset);
+            return;
+          }
+        }
+
+        get readable() {
+          const self = this;
+          return {
+            getReader() {
+              return {
+                async read() {
+                  const maxWait = 10000; // 10 second max wait
+                  const start = Date.now();
+                  while (self.rxQueue.length === 0 && !self.closed) {
+                    if (Date.now() - start > maxWait) {
+                      return { done: true };
+                    }
+                    await new Promise((r) => setTimeout(r, 5));
+                  }
+                  if (self.closed && self.rxQueue.length === 0) {
+                    return { done: true };
+                  }
+                  return { value: self.rxQueue.shift(), done: false };
+                },
+                releaseLock() {},
+                async cancel() {
+                  self.closed = true;
+                },
+              };
+            },
+          };
+        }
+
+        get writable() {
+          const self = this;
+          return {
+            getWriter() {
+              return {
+                ready: Promise.resolve(),
+                async write(data) {
+                  const bytes = new Uint8Array(data);
+
+                  // Binary data for S command
+                  if (self.pendingBinary > 0) {
+                    self.totalBinaryReceived += bytes.length;
+
+                    // Simulate transmission time
+                    const txTime = Math.ceil(
+                      (bytes.length * 10 * 1000) / 230400
+                    );
+                    await new Promise((r) => setTimeout(r, txTime));
+
+                    if (self.totalBinaryReceived >= self.pendingBinary) {
+                      self.pendingBinary = 0;
+                    }
+                    return;
+                  }
+
+                  // Text command
+                  const cmdStr = new TextDecoder().decode(bytes);
+                  await self.processCommand(cmdStr);
+                },
+                releaseLock() {},
+              };
+            },
+          };
+        }
+      }
+
+      window.runTimingTest = async function (sizeKB = 63) {
+        const output = document.getElementById("output");
+        output.innerHTML = "";
+        document.getElementById("btnRun").disabled = true;
+
+        const firmwareSize = sizeKB * 1024;
+        const chunkSize = 2048;
+        const numChunks = Math.ceil(firmwareSize / chunkSize);
+
+        startTime = Date.now();
+
+        log("═".repeat(70), "header");
+        log(
+          `TIMING TEST: ${sizeKB}KB firmware (${numChunks} chunks)`,
+          "header"
+        );
+        log("═".repeat(70), "header");
+        log("");
+        log(`Firmware size: ${firmwareSize} bytes`);
+        log(`Chunk size: ${chunkSize} bytes`);
+        log(`Expected chunks: ${numChunks}`);
+        log("");
+
+        progress(0, "Starting...");
+
+        const mockPort = new TimingMockPort();
+        const bossa = new Bossa(mockPort);
+
+        try {
+          // ===== CONNECT =====
+          log("─".repeat(70));
+          log("PHASE 1: CONNECT", "header");
+          log("─".repeat(70));
+
+          await mockPort.open({ baudRate: 230400 });
+          await bossa.connect();
+          log("Port opened", "pass");
+          progress(5, "Connected");
+
+          // ===== HANDSHAKE =====
+          log("");
+          log("─".repeat(70));
+          log("PHASE 2: HANDSHAKE", "header");
+          log("─".repeat(70));
+
+          const handshakeStart = Date.now();
+          log("→ Sending N#...");
+          await bossa.hello({ attempts: 1, proceedOnFailure: true });
+          const handshakeTime = Date.now() - handshakeStart;
+          log(`✓ Handshake complete (${handshakeTime}ms)`, "pass");
+          progress(10, "Handshake complete");
+
+          // ===== ERASE =====
+          log("");
+          log("─".repeat(70));
+          log("PHASE 3: ERASE", "header");
+          log("─".repeat(70));
+
+          const eraseStart = Date.now();
+          log("→ Erasing flash...");
+          await bossa.chipErase(0);
+          const eraseTime = Date.now() - eraseStart;
+          log(`✓ Erase complete (${eraseTime}ms)`, "pass");
+          progress(15, "Flash erased");
+
+          // ===== WRITE CHUNKS =====
+          log("");
+          log("─".repeat(70));
+          log("PHASE 4: WRITE CHUNKS", "header");
+          log("─".repeat(70));
+
+          const firmware = new Uint8Array(firmwareSize);
+          for (let i = 0; i < firmware.length; i++) firmware[i] = i & 0xff;
+
+          const SRAM_OFFSET = 0x34;
+          let flashAddr = 0;
+          const writeStart = Date.now();
+          let chunkTimes = [];
+
+          for (let i = 0; i < firmware.length; i += chunkSize) {
+            const chunkNum = Math.floor(i / chunkSize) + 1;
+            const chunk = firmware.subarray(
+              i,
+              Math.min(i + chunkSize, firmware.length)
+            );
+            const chunkStart = Date.now();
+
+            // S command + binary
+            await bossa.writeBinary(SRAM_OFFSET, chunk);
+
+            // Y commands (set offset + flash write)
+            await bossa.writeBuffer(SRAM_OFFSET, flashAddr, chunk.length);
+
+            const chunkTime = Date.now() - chunkStart;
+            chunkTimes.push(chunkTime);
+
+            flashAddr += chunk.length;
+
+            // Log every 5 chunks or last chunk
+            if (chunkNum % 5 === 0 || chunkNum === numChunks) {
+              const avgTime =
+                chunkTimes.slice(-5).reduce((a, b) => a + b, 0) /
+                Math.min(5, chunkTimes.length);
+              log(
+                `  Chunk ${chunkNum}/${numChunks} @ 0x${(
+                  flashAddr - chunk.length
+                )
+                  .toString(16)
+                  .padStart(5, "0")} (${chunkTime}ms, avg: ${avgTime.toFixed(
+                  0
+                )}ms)`
+              );
+            }
+
+            const pct = 15 + Math.round((chunkNum / numChunks) * 75);
+            progress(pct, `Chunk ${chunkNum}/${numChunks}`);
+          }
+
+          const writeTime = Date.now() - writeStart;
+          const avgChunkTime =
+            chunkTimes.reduce((a, b) => a + b, 0) / chunkTimes.length;
+
+          log("");
+          log(`✓ All ${numChunks} chunks written`, "pass");
+          log(
+            `  Total write time: ${writeTime}ms (${(writeTime / 1000).toFixed(
+              1
+            )}s)`,
+            "time"
+          );
+          log(`  Average chunk time: ${avgChunkTime.toFixed(1)}ms`, "time");
+          log(
+            `  Throughput: ${(
+              ((firmwareSize / writeTime) * 1000) /
+              1024
+            ).toFixed(1)} KB/s`,
+            "time"
+          );
+          progress(92, "Write complete");
+
+          // ===== FINALIZE =====
+          log("");
+          log("─".repeat(70));
+          log("PHASE 5: FINALIZE", "header");
+          log("─".repeat(70));
+
+          log("→ Waiting 500ms for flash settle...");
+          await new Promise((r) => setTimeout(r, 500));
+          log("✓ Flash settle complete", "pass");
+          progress(95, "Finalizing...");
+
+          // ===== RESET =====
+          log("");
+          log("─".repeat(70));
+          log("PHASE 6: RESET", "header");
+          log("─".repeat(70));
+
+          const resetStart = Date.now();
+          log("→ Sending K# reset...");
+          await bossa.reset();
+          const resetTime = Date.now() - resetStart;
+          log(`✓ Reset sent (${resetTime}ms)`, "pass");
+          progress(100, "Complete!");
+
+          await bossa.disconnect();
+
+          // ===== SUMMARY =====
+          const totalTime = Date.now() - startTime;
+
+          log("");
+          log("═".repeat(70), "header");
+          log("TIMING SUMMARY", "header");
+          log("═".repeat(70), "header");
+          log("");
+          log(`  Firmware size:     ${sizeKB} KB (${firmwareSize} bytes)`);
+          log(`  Chunks:            ${numChunks} × ${chunkSize} bytes`);
+          log("");
+          log(`  Handshake time:    ${handshakeTime}ms`, "time");
+          log(`  Erase time:        ${eraseTime}ms`, "time");
+          log(
+            `  Write time:        ${writeTime}ms (${(writeTime / 1000).toFixed(
+              1
+            )}s)`,
+            "time"
+          );
+          log(`  Avg chunk time:    ${avgChunkTime.toFixed(1)}ms`, "time");
+          log(`  Reset time:        ${resetTime}ms`, "time");
+          log("");
+          log(
+            `  TOTAL TIME:        ${totalTime}ms (${(totalTime / 1000).toFixed(
+              1
+            )}s)`,
+            "info"
+          );
+          log(
+            `  Throughput:        ${(
+              ((firmwareSize / totalTime) * 1000) /
+              1024
+            ).toFixed(1)} KB/s`,
+            "info"
+          );
+          log("");
+
+          // Compare to demo_blink (52KB) timing
+          const blinkEstimate = ((52 * 1024) / firmwareSize) * totalTime;
+          const servoEstimate = ((55 * 1024) / firmwareSize) * totalTime;
+
+          log("Estimated times for other sketches (based on this test):");
+          log(`  demo_blink (52KB): ~${(blinkEstimate / 1000).toFixed(1)}s`);
+          log(`  demo_servo (55KB): ~${(servoEstimate / 1000).toFixed(1)}s`);
+          log("");
+
+          log("═".repeat(70), "header");
+          log("✅ TIMING TEST COMPLETE", "pass");
+          log("═".repeat(70), "header");
+        } catch (e) {
+          log("");
+          log(`❌ ERROR: ${e.message}`, "fail");
+          log(e.stack, "fail");
+          progress(0, "Error!");
+        }
+
+        document.getElementById("btnRun").disabled = false;
+      };
+    </script>
+  </body>
+</html>

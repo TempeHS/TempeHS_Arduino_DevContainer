@@ -3,13 +3,42 @@ import { TerminalUI } from "./ui/TerminalUI.js";
 import { UploadManager } from "./services/UploadManager.js";
 import { PlotterUI } from "./ui/PlotterUI.js";
 
+// Version for cache debugging - update this when making changes
+const CLIENT_VERSION = "1.0.6-wireshark-addr-fix";
+console.log(
+  `%c[Arduino Bridge Client] Version: ${CLIENT_VERSION}`,
+  "color: #00ff00; font-weight: bold;"
+);
+console.log(`[Arduino Bridge Client] Loaded at: ${new Date().toISOString()}`);
+
+// Fetch and display server version for cache verification
+fetch("/api/version")
+  .then((res) => res.json())
+  .then((data) => {
+    console.log(
+      `%c[Arduino Bridge Server] Version: ${data.version}`,
+      "color: #00ffff; font-weight: bold;"
+    );
+    if (data.version !== CLIENT_VERSION) {
+      console.warn(
+        `%c⚠️ VERSION MISMATCH! Client: ${CLIENT_VERSION}, Server: ${data.version}`,
+        "color: #ff0000; font-weight: bold;"
+      );
+    } else {
+      console.log(`%c✅ Client and Server versions match`, "color: #00ff00;");
+    }
+  })
+  .catch((err) =>
+    console.warn("[Version Check] Could not fetch server version:", err.message)
+  );
+
 const serialManager = new SerialManager();
 const uploadManager = new UploadManager();
 const terminal = new TerminalUI("terminal-container");
 const plotter = new PlotterUI("plotter-container");
 
 // Track the last working baud rate for reconnection after upload
-let lastWorkingBaudRate = 115200;
+let lastWorkingBaudRate = 9600;
 
 // UI Elements
 const connectBtn = document.getElementById("connectBtn");
@@ -383,20 +412,31 @@ async function handleUpload(port, firmwareData, fqbn) {
     );
     terminal.write("\r\nUpload Complete!\r\n");
 
-    // 6. Reconnect Serial Monitor with auto-detect (new sketch may have different baud rate)
+    // 6. Reconnect Serial Monitor using current baud selection
     try {
       // Close port if still open
       if (port.readable || port.writable) {
         await port.close();
       }
 
-      // Auto-detect baud rate for the NEW sketch (it may be different from previous)
-      const detectedBaud = await autoDetectBaudRate(port, terminal);
-      lastWorkingBaudRate = detectedBaud;
-      baudSelect.value = detectedBaud.toString();
+      const reconnectBaud =
+        parseInt(baudSelect.value, 10) ||
+        lastWorkingBaudRate ||
+        getDefaultBaudRate(boardSelect.value);
+      lastWorkingBaudRate = reconnectBaud;
+      baudSelect.value = reconnectBaud.toString();
 
-      // Connect with detected baud rate
-      await serialManager.connect(detectedBaud, port);
+      // Connect with selected baud rate
+      await serialManager.connect(reconnectBaud, port);
+
+      try {
+        await serialManager.write("\r\n");
+      } catch (handshakeError) {
+        console.warn(
+          "[Client] Unable to send reconnection handshake:",
+          handshakeError
+        );
+      }
 
       // Success - update UI to connected state
       connectBtn.disabled = true;
@@ -471,8 +511,22 @@ async function handleUpload(port, firmwareData, fqbn) {
           // Try to reconnect to the original port (device reboots after flash)
           try {
             await new Promise((r) => setTimeout(r, 2000)); // Wait for reboot
-            const baudRate = parseInt(baudSelect.value);
+            const baudRate =
+              parseInt(baudSelect.value, 10) ||
+              lastWorkingBaudRate ||
+              getDefaultBaudRate(boardSelect.value);
+            lastWorkingBaudRate = baudRate;
+            baudSelect.value = baudRate.toString();
             await serialManager.connect(baudRate, port);
+
+            try {
+              await serialManager.write("\r\n");
+            } catch (handshakeError) {
+              console.warn(
+                "[Client] Unable to send post-bootloader handshake:",
+                handshakeError
+              );
+            }
           } catch (e) {
             terminal.write(
               "\r\nDevice rebooted. Please reconnect manually.\r\n"
@@ -573,12 +627,26 @@ async function handleUpload(port, firmwareData, fqbn) {
         } catch (e) {}
       }
 
-      const baudRate = parseInt(baudSelect.value);
+      const baudRate =
+        parseInt(baudSelect.value, 10) ||
+        lastWorkingBaudRate ||
+        getDefaultBaudRate(boardSelect.value);
+      lastWorkingBaudRate = baudRate;
+      baudSelect.value = baudRate.toString();
       // If we have a saved port, try to reuse it
       if (port) {
         await serialManager.connect(baudRate, port);
       } else {
         await serialManager.connect(baudRate);
+      }
+
+      try {
+        await serialManager.write("\r\n");
+      } catch (handshakeError) {
+        console.warn(
+          "[Client] Unable to send recovery handshake:",
+          handshakeError
+        );
       }
     } catch (e) {
       console.error("Recovery reconnect failed:", e);
@@ -695,135 +763,12 @@ compileUploadBtn.addEventListener("click", async () => {
   }
 });
 
-// Get default baud rate for a board (fallback when no auto-detect)
+// Get default baud rate for a board (used when user hasn't selected a baud)
 function getDefaultBaudRate(fqbn) {
   // ESP32 boards often use 115200
   if (fqbn && fqbn.includes("esp32")) return 115200;
   // Most Arduino boards default to 9600
   return 9600;
-}
-
-// Common baud rates to try (most common first, then low to high)
-const BAUD_RATES_TO_TRY = [
-  115200, 9600, 19200, 57600, 300, 1200, 2400, 4800, 14400, 28800, 38400, 56000,
-  76800, 128000, 230400, 250000,
-];
-
-// Auto-detect baud rate by checking if received data is readable ASCII
-// Fast detection: Try 115200 first, if ASCII -> done, if garbage -> try others, if no data -> use 115200
-async function autoDetectBaudRate(port, terminal) {
-  terminal.write("\r\nAuto-detecting baud rate...\r\n");
-
-  const PRIMARY_BAUD = 115200;
-
-  // Step 1: Try primary baud rate (115200) with longer timeout
-  const primaryResult = await tryBaudRate(port, PRIMARY_BAUD, terminal, 2000);
-
-  if (primaryResult.status === "ascii") {
-    // Got readable ASCII - this is the right baud rate
-    terminal.write(`\r\n✓ Detected baud rate: ${PRIMARY_BAUD}\r\n`);
-    return PRIMARY_BAUD;
-  }
-
-  if (primaryResult.status === "no_data") {
-    // No data at all - sketch probably not printing, use default
-    terminal.write(`  ${PRIMARY_BAUD}: no data\r\n`);
-    terminal.write("\r\n⚠ No serial data detected.\r\n");
-    terminal.write("  (Sketch may not be printing to Serial)\r\n");
-    terminal.write(`  Using default: ${PRIMARY_BAUD}\r\n`);
-    return PRIMARY_BAUD;
-  }
-
-  // Got garbage data - wrong baud rate, try others with short timeouts
-  terminal.write(
-    `  ${PRIMARY_BAUD}: ${primaryResult.readablePercent}% readable - trying other rates...\r\n`
-  );
-
-  for (const baudRate of BAUD_RATES_TO_TRY) {
-    if (baudRate === PRIMARY_BAUD) continue; // Already tried
-
-    const result = await tryBaudRate(port, baudRate, terminal, 800);
-
-    if (result.status === "ascii") {
-      terminal.write(`\r\n✓ Detected baud rate: ${baudRate}\r\n`);
-      return baudRate;
-    }
-
-    if (result.status === "garbage") {
-      terminal.write(`  ${baudRate}: ${result.readablePercent}% readable\r\n`);
-    }
-    // Skip 'no_data' results silently - just means device stopped responding
-  }
-
-  // No good match found, return primary
-  terminal.write(`\r\nCould not detect baud rate, using ${PRIMARY_BAUD}\r\n`);
-  return PRIMARY_BAUD;
-}
-
-// Try a single baud rate and return status: 'ascii', 'garbage', or 'no_data'
-async function tryBaudRate(port, baudRate, terminal, timeoutMs) {
-  try {
-    await port.open({ baudRate });
-
-    // Wait for Arduino reset/bootloader
-    await new Promise((resolve) => setTimeout(resolve, 500));
-
-    const reader = port.readable.getReader();
-    let receivedData = [];
-    let dataReceived = false;
-
-    const timeoutPromise = new Promise((resolve) =>
-      setTimeout(resolve, timeoutMs)
-    );
-
-    const readPromise = (async () => {
-      try {
-        while (true) {
-          const { value, done } = await reader.read();
-          if (done) break;
-          if (value && value.length > 0) {
-            dataReceived = true;
-            receivedData.push(...value);
-            if (receivedData.length >= 20) break;
-          }
-        }
-      } catch (e) {
-        // Read interrupted
-      }
-    })();
-
-    await Promise.race([timeoutPromise, readPromise]);
-
-    try {
-      await reader.cancel();
-    } catch (e) {}
-    reader.releaseLock();
-    await port.close();
-
-    if (!dataReceived || receivedData.length === 0) {
-      return { status: "no_data" };
-    }
-
-    // Check if data is readable ASCII
-    const printableCount = receivedData.filter(
-      (byte) =>
-        (byte >= 32 && byte <= 126) || byte === 10 || byte === 13 || byte === 9
-    ).length;
-
-    const readableRatio = printableCount / receivedData.length;
-    const readablePercent = Math.round(readableRatio * 100);
-
-    if (readableRatio >= 0.8) {
-      return { status: "ascii", readablePercent };
-    } else {
-      return { status: "garbage", readablePercent };
-    }
-  } catch (e) {
-    try {
-      await port.close();
-    } catch (e2) {}
-    return { status: "no_data" };
-  }
 }
 
 // Connect Button Handler
@@ -855,13 +800,24 @@ connectBtn.addEventListener("click", async () => {
       }
     }
 
-    // Try to auto-detect baud rate by sampling data
-    const detectedBaud = await autoDetectBaudRate(port, terminal);
-    baudSelect.value = detectedBaud.toString();
-    lastWorkingBaudRate = detectedBaud; // Save for reconnection after upload
+    // Use selected baud rate (fallback to board default if unset)
+    const selectedBaud =
+      parseInt(baudSelect.value, 10) || getDefaultBaudRate(boardSelect.value);
+    lastWorkingBaudRate = selectedBaud;
+    baudSelect.value = selectedBaud.toString();
 
-    // Now connect with SerialManager using the detected baud rate and selected port
-    await serialManager.connect(detectedBaud, port);
+    // Connect with SerialManager using the selected baud rate and port
+    await serialManager.connect(selectedBaud, port);
+
+    // Send newline so sketches can detect the serial monitor opening
+    try {
+      await serialManager.write("\r\n");
+    } catch (handshakeError) {
+      console.warn(
+        "[Client] Unable to send connection handshake:",
+        handshakeError
+      );
+    }
 
     connectBtn.disabled = true;
     disconnectBtn.disabled = false;
@@ -900,7 +856,11 @@ disconnectBtn.addEventListener("click", async () => {
 
 // Baud Rate Change Handler
 baudSelect.addEventListener("change", async () => {
-  const newBaudRate = parseInt(baudSelect.value);
+  let newBaudRate = parseInt(baudSelect.value, 10);
+  if (Number.isNaN(newBaudRate)) {
+    newBaudRate = lastWorkingBaudRate || getDefaultBaudRate(boardSelect.value);
+    baudSelect.value = newBaudRate.toString();
+  }
 
   // Always track the selected baud rate for reconnection
   lastWorkingBaudRate = newBaudRate;
@@ -914,6 +874,14 @@ baudSelect.addEventListener("change", async () => {
     try {
       await serialManager.disconnect();
       await serialManager.connect(newBaudRate, savedPort);
+      try {
+        await serialManager.write("\r\n");
+      } catch (handshakeError) {
+        console.warn(
+          "[Client] Unable to send baud-change handshake:",
+          handshakeError
+        );
+      }
       terminal.write(`Baud rate changed to ${newBaudRate}\r\n`);
     } catch (error) {
       console.error("Failed to change baud rate:", error);

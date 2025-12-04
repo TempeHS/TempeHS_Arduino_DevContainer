@@ -28,6 +28,20 @@ export class WebSerialProvider {
 
       console.log(`[WebSerialProvider] Opening port at ${baudRate} baud...`);
       await this.port.open({ baudRate });
+
+      // Native USB boards (e.g., Uno R4) buffer output until DTR is asserted.
+      // Raise both DTR/RTS like Arduino IDE so sketches start streaming data immediately.
+      try {
+        await this.port.setSignals({
+          dataTerminalReady: true,
+          requestToSend: true,
+        });
+      } catch (signalError) {
+        console.warn(
+          "[WebSerialProvider] Unable to set control signals:",
+          signalError
+        );
+      }
       console.log("[WebSerialProvider] Port opened, starting read loop...");
 
       this.keepReading = true;
@@ -48,6 +62,17 @@ export class WebSerialProvider {
       await this.writer.close();
     }
     if (this.port) {
+      try {
+        await this.port.setSignals({
+          dataTerminalReady: false,
+          requestToSend: false,
+        });
+      } catch (signalError) {
+        console.warn(
+          "[WebSerialProvider] Unable to clear control signals:",
+          signalError
+        );
+      }
       await this.port.close();
     }
     this.port = null;

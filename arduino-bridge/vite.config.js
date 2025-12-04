@@ -21,6 +21,7 @@ export default defineConfig({
     rollupOptions: {
       input: {
         main: "index.html",
+        test: "tests/protocol-test.html",
       },
     },
   },

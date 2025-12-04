@@ -1,18 +1,16 @@
 /**
- * BOSSA Protocol Implementation
- * Reference: https://github.com/shumatech/BOSSA/blob/master/src/Samba.cpp
- * Reference: https://github.com/arduino-libraries/arduino_serialupdater/blob/main/src/Samba.cpp
+ * BOSSA Protocol Implementation for Arduino R4 WiFi
+ * Version: 1.2.0-minimal-logging
  */
 export class Bossa {
   constructor(port) {
     this.port = port;
     this.reader = null;
     this.writer = null;
-    this.isSamd = false; // Flag to enable SAMD-specific workarounds
+    this.isSamd = false;
   }
 
   async connect() {
-    // Assume port is already open
     this.reader = this.port.readable.getReader();
     this.writer = this.port.writable.getWriter();
   }
@@ -29,10 +27,13 @@ export class Bossa {
     }
   }
 
-  async flush(durationMs = 200) {
-    // Drain any pending data for the requested duration without throwing
-    const deadline = Date.now() + durationMs;
+  async delay(ms) {
+    return new Promise((resolve) => setTimeout(resolve, ms));
+  }
 
+  async flush(durationMs = 200) {
+    const deadline = Date.now() + durationMs;
+    let totalFlushed = 0;
     try {
       while (Date.now() < deadline) {
         const remaining = Math.max(0, deadline - Date.now());
@@ -41,318 +42,134 @@ export class Bossa {
           setTimeout(() => resolve("timeout"), waitSlice)
         );
         const result = await Promise.race([this.reader.read(), timeoutPromise]);
-
-        if (result === "timeout") {
-          continue;
-        }
-
+        if (result === "timeout") continue;
         const { value, done } = result;
-        if (done) {
-          break;
-        }
-        if (value && value.length) {
-          this.logHex("Flush RX", value);
-        } else {
-          // Empty chunk, bail out to avoid busy looping
-          break;
-        }
+        if (done) break;
+        if (value && value.length) totalFlushed += value.length;
+        else break;
       }
-    } catch (e) {
-      console.warn(`[Bossa] Flush error ignored: ${e.message}`);
-    }
-  }
-
-  logHex(label, data) {
-    if (!data || !data.length) {
-      return;
-    }
-    const hex = Array.from(data)
-      .map((b) => b.toString(16).padStart(2, "0"))
-      .join(" ");
-    console.log(`[Bossa] ${label} (${data.length}): ${hex}`);
-  }
-
-  async delay(ms) {
-    return new Promise((resolve) => setTimeout(resolve, ms));
+    } catch (e) {}
+    if (totalFlushed > 0) console.log(`[Bossa] Flushed ${totalFlushed} bytes`);
   }
 
   bytesToPrintable(bytes) {
-    if (!bytes || !bytes.length) {
-      return "";
-    }
-
-    const printable = Array.from(bytes)
+    if (!bytes || !bytes.length) return "";
+    return Array.from(bytes)
       .map((b) => (b >= 0x20 && b <= 0x7e ? String.fromCharCode(b) : ""))
       .join("")
       .replace(/[\r\n]+/g, "")
       .replace(/>+$/, "")
       .trim();
-
-    return printable;
   }
 
-  async readUntilTerminator({ terminators, timeout = 1000, maxBytes = 256 }) {
+  async readAck(expectedCmd, timeout = 1000) {
     const collected = [];
-    const terminatorSet = new Set(terminators ?? [0x0a, 0x0d, 0x3e]);
     const start = Date.now();
+    const expectedByte = expectedCmd.charCodeAt(0);
 
-    while (true) {
+    while (collected.length < 3) {
       if (Date.now() - start > timeout) {
-        throw new Error("Timeout waiting for response");
+        console.log(`[Bossa] ❌ ${expectedCmd}# TIMEOUT`);
+        return false;
       }
-
       const remaining = Math.max(0, timeout - (Date.now() - start));
       const waitSlice = Math.min(remaining, 50);
       const timeoutPromise = new Promise((resolve) =>
         setTimeout(() => resolve("timeout"), waitSlice)
       );
-
       const result = await Promise.race([this.reader.read(), timeoutPromise]);
-
-      if (result === "timeout") {
-        continue;
-      }
-
+      if (result === "timeout") continue;
       const { value, done } = result;
-      if (done) {
-        break;
-      }
-
+      if (done) break;
       if (value && value.length) {
-        this.logHex("RX Chunk", value);
         collected.push(...value);
-
-        if (collected.length >= maxBytes) {
-          break;
-        }
-
-        if (value.some((byte) => terminatorSet.has(byte))) {
-          break;
-        }
+        if (value.includes(0x0d)) break;
       }
     }
 
-    if (!collected.length) {
-      throw new Error("Timeout waiting for response");
-    }
+    if (collected.includes(expectedByte)) return true;
 
+    const gotHex = collected
+      .map((b) => b.toString(16).padStart(2, "0"))
+      .join(" ");
+    console.log(`[Bossa] ❌ ${expectedCmd}# WRONG ACK: [${gotHex}]`);
+    return false;
+  }
+
+  async readUntilTerminator({ timeout = 1000, maxBytes = 256 }) {
+    const collected = [];
+    const start = Date.now();
+    while (true) {
+      if (Date.now() - start > timeout) throw new Error("Timeout");
+      const remaining = Math.max(0, timeout - (Date.now() - start));
+      const waitSlice = Math.min(remaining, 50);
+      const timeoutPromise = new Promise((resolve) =>
+        setTimeout(() => resolve("timeout"), waitSlice)
+      );
+      const result = await Promise.race([this.reader.read(), timeoutPromise]);
+      if (result === "timeout") continue;
+      const { value, done } = result;
+      if (done) break;
+      if (value && value.length) {
+        collected.push(...value);
+        if (collected.length >= maxBytes || value.includes(0x0d)) break;
+      }
+    }
+    if (!collected.length) throw new Error("Timeout");
     return new Uint8Array(collected);
   }
 
-  async autoBaudSync() {
-    // Mimic BOSSA Samba.cpp auto-baud preamble for stubborn bootloaders
-    try {
-      const syncByte = new Uint8Array([0x80]);
-      for (let i = 0; i < 3; i++) {
-        await this.writer.write(syncByte);
-        await this.delay(10);
-      }
-      await this.writer.write(new Uint8Array([0x23])); // '#'
-      await this.delay(20);
-      await this.flush(100);
-    } catch (err) {
-      console.warn(`[Bossa] Auto-baud sync ignored: ${err.message}`);
-    }
-  }
-
-  async readBytes(count, timeout = 1000) {
-    const result = new Uint8Array(count);
-    let offset = 0;
-    const startTime = Date.now();
-
-    while (offset < count) {
-      if (Date.now() - startTime > timeout) {
-        throw new Error(`Timeout waiting for ${count} bytes (got ${offset})`);
-      }
-
-      // Race read against remaining timeout
-      const remainingTime = timeout - (Date.now() - startTime);
-      const timeoutPromise = new Promise((_, reject) =>
-        setTimeout(() => reject(new Error("Timeout")), remainingTime)
-      );
-
-      try {
-        const { value, done } = await Promise.race([
-          this.reader.read(),
-          timeoutPromise,
-        ]);
-
-        if (done) throw new Error("Stream closed");
-        if (value) {
-          this.logHex("RX Chunk", value);
-          // Copy what we need
-          const toCopy = Math.min(value.length, count - offset);
-          result.set(value.subarray(0, toCopy), offset);
-          offset += toCopy;
-
-          // If we got more than we needed, we lose the extra bytes here
-          // Ideally we should buffer them, but for BOSSA strict protocol it's usually fine
-          if (value.length > toCopy) {
-            console.warn(
-              `[Bossa] Discarding ${value.length - toCopy} extra bytes`
-            );
-          }
-        }
-      } catch (e) {
-        throw e;
-      }
-    }
-    return result;
-  }
-
-  async readResponse(timeout = 1000) {
-    const decoder = new TextDecoder();
-    let response = "";
-    const startTime = Date.now();
-
-    try {
-      while (true) {
-        if (Date.now() - startTime > timeout) {
-          throw new Error("Timeout waiting for response");
-        }
-
-        const remainingTime = timeout - (Date.now() - startTime);
-        const timeoutPromise = new Promise((_, reject) =>
-          setTimeout(() => reject(new Error("Timeout")), remainingTime)
-        );
-
-        const result = await Promise.race([this.reader.read(), timeoutPromise]);
-
-        if (result === "timeout") {
-          continue;
-        }
-
-        const { value, done } = result;
-
-        if (done) break;
-        if (value) {
-          this.logHex("RX Raw", value);
-          const chunk = decoder.decode(value, { stream: true });
-          response += chunk;
-          if (
-            response.includes("\n") ||
-            response.includes("\r") ||
-            response.includes(">")
-          ) {
-            break;
-          }
-        }
-      }
-    } catch (e) {
-      console.log(`[Bossa] Read error/timeout: ${e.message}`);
-      throw e;
-    }
-
-    const cleaned = response
-      .replace(/[\r\n]+/g, "")
-      .replace(/>+$/, "")
-      .trim();
-
-    if (!cleaned) {
-      throw new Error("Empty response");
-    }
-
-    return cleaned;
-  }
-
   async writeCommand(cmd) {
-    console.log(`[Bossa] TX Command: ${cmd}`);
     const encoder = new TextEncoder();
-    const data = encoder.encode(cmd);
-    this.logHex("TX Raw", data);
-    await this.writer.write(data);
+    await this.writer.write(encoder.encode(cmd));
   }
 
-  /**
-   * BOSSA Handshake - EXACTLY as captured from Arduino IDE
-   *
-   * From Wireshark capture (R4.pcapng):
-   *   Frame 2681: TX "N#" (Normal/Binary mode)
-   *   Frame 2683: RX "\n\r" (ACK)
-   *   Frame 2685: TX "V#" (Get Version)
-   *   Frame 2687: RX "Arduino Bootloader..."
-   *   Frame 2711: TX "I#" (Device Info - optional)
-   *
-   * CRITICAL: NO auto-baud preambles (0x80), NO signal toggling - just send commands!
-   *
-   * @param {Object} options
-   * @param {boolean} options.proceedOnFailure - If true, return fake version on timeout
-   * @param {number} options.attempts - Number of retry attempts
-   */
   async hello(options = {}) {
     const { proceedOnFailure = false, attempts = 3 } = options;
-    console.log("[Bossa] === HANDSHAKE (exact Wireshark sequence) ===");
+    console.log(`[Bossa] ═══ HANDSHAKE ═══`);
     let lastError = null;
 
     for (let attempt = 1; attempt <= attempts; attempt++) {
       try {
-        console.log(`[Bossa] Attempt ${attempt}/${attempts}`);
-
-        // Step 1: N# (Normal/Binary mode)
+        console.log(`[Bossa] → N#`);
         await this.writeCommand("N#");
-
-        // Wait for ACK (\n\r)
         try {
-          const ackBytes = await this.readUntilTerminator({
-            terminators: [0x0a, 0x0d, 0x3e],
-            timeout: 1000,
-            maxBytes: 16,
-          });
-          const ackText = this.bytesToPrintable(ackBytes) || "\\n\\r";
-          console.log(`[Bossa] N# ACK received: ${ackText}`);
-        } catch (ackErr) {
-          // N# ACK is optional on some bootloaders, continue to V#
-          console.log(`[Bossa] N# ACK not received, continuing to V#`);
+          await this.readUntilTerminator({ timeout: 1000, maxBytes: 16 });
+          console.log(`[Bossa] ← N# OK`);
+        } catch (e) {
+          console.log(`[Bossa] ← N# no ACK`);
         }
 
-        // Small delay between commands
-        await this.delay(50);
+        await this.delay(200);
 
-        // Step 2: V# (Get Version)
+        console.log(`[Bossa] → V#`);
         await this.writeCommand("V#");
-
         const versionBytes = await this.readUntilTerminator({
-          terminators: [0x0a, 0x0d, 0x3e],
           timeout: 2000,
           maxBytes: 256,
         });
         const version = this.bytesToPrintable(versionBytes);
+        if (!version) throw new Error("Empty version");
+        console.log(`[Bossa] ← Version: ${version}`);
 
-        if (!version) {
-          throw new Error("Empty version response");
-        }
-
-        console.log(`[Bossa] Version: ${version}`);
-
-        // Step 3: I# (Device Info - optional, as seen in capture)
         try {
-          await this.delay(50);
+          await this.delay(25);
+          console.log(`[Bossa] → I#`);
           await this.writeCommand("I#");
           const infoBytes = await this.readUntilTerminator({
-            terminators: [0x0a, 0x0d, 0x3e],
             timeout: 500,
             maxBytes: 64,
           });
           const info = this.bytesToPrintable(infoBytes);
-          if (info) {
-            console.log(`[Bossa] Device Info: ${info}`);
-          }
-        } catch (infoErr) {
-          // I# is optional
-          console.log(`[Bossa] I# not supported (optional)`);
-        }
+          if (info) console.log(`[Bossa] ← Info: ${info}`);
+        } catch (e) {}
 
-        if (version.includes("Arduino")) {
-          this.isSamd = true;
-        }
-
-        console.log("[Bossa] === HANDSHAKE SUCCESS ===");
+        if (version.includes("Arduino")) this.isSamd = true;
+        console.log(`[Bossa] ═══ HANDSHAKE OK ═══`);
         return version;
       } catch (err) {
         lastError = err;
-        console.warn(`[Bossa] Attempt ${attempt} failed: ${err.message}`);
-
-        // Small delay before retry
+        console.log(`[Bossa] Attempt ${attempt} failed: ${err.message}`);
         if (attempt < attempts) {
           await this.flush(100);
           await this.delay(200);
@@ -360,140 +177,91 @@ export class Bossa {
       }
     }
 
-    // All attempts failed
-    if (proceedOnFailure) {
-      console.warn("[Bossa] Handshake failed, proceeding anyway (blind mode)");
-      return "ASSUMED:Arduino Bootloader";
-    }
-
-    throw (
-      lastError || new Error("Handshake failed - no response from bootloader")
-    );
+    if (proceedOnFailure) return "ASSUMED:Arduino Bootloader";
+    throw lastError || new Error("Handshake failed");
   }
 
-  /**
-   * Extended sync patterns for stubborn bootloaders
-   */
-  async extendedSync(attemptNum) {
-    try {
-      // Different sync strategies based on attempt number
-      const strategies = [
-        // Strategy 2: More 0x80 bytes with longer delays
-        async () => {
-          console.log("[Bossa] Sync strategy: Extended 0x80 preamble");
-          for (let i = 0; i < 10; i++) {
-            await this.writer.write(new Uint8Array([0x80]));
-            await this.delay(5);
-          }
-          await this.writer.write(new Uint8Array([0x23])); // '#'
-          await this.delay(50);
-        },
-        // Strategy 3: Newline wake-up
-        async () => {
-          console.log("[Bossa] Sync strategy: Newline wake-up");
-          await this.writer.write(new Uint8Array([0x0a, 0x0d])); // LF CR
-          await this.delay(20);
-          await this.writer.write(new Uint8Array([0x80, 0x80, 0x23]));
-          await this.delay(50);
-        },
-        // Strategy 4: SAM-BA classic (used by some Atmel tools)
-        async () => {
-          console.log("[Bossa] Sync strategy: SAM-BA classic");
-          // Send '#' repeatedly to sync
-          for (let i = 0; i < 5; i++) {
-            await this.writer.write(new Uint8Array([0x23]));
-            await this.delay(30);
-          }
-        },
-        // Strategy 5: Break character simulation
-        async () => {
-          console.log("[Bossa] Sync strategy: Break simulation");
-          // Send 0x00 bytes (simulates break at lower bauds)
-          await this.writer.write(new Uint8Array([0x00, 0x00, 0x00]));
-          await this.delay(50);
-          await this.writer.write(new Uint8Array([0x80, 0x80, 0x23]));
-          await this.delay(50);
-        },
-      ];
+  async chipErase(startAddr) {
+    const addrHex = startAddr.toString(16).padStart(8, "0");
+    console.log(`[Bossa] ═══ ERASE ═══`);
+    console.log(`[Bossa] → X${addrHex}#`);
+    await this.writeCommand(`X${addrHex}#`);
 
-      const strategyIndex = (attemptNum - 2) % strategies.length;
-      await strategies[strategyIndex]();
-      await this.flush(100);
-    } catch (err) {
-      console.warn(`[Bossa] Extended sync error: ${err.message}`);
-    }
+    const start = Date.now();
+    const ok = await this.readAck("X", 5000);
+    const ms = Date.now() - start;
+    console.log(`[Bossa] ← X ${ok ? "OK" : "FAILED"} (${ms}ms)`);
   }
 
   async writeBinary(address, data) {
-    // Command: S[addr],[size]#
-    const cmd = `S${address.toString(16)},${data.length.toString(16)}#`;
-    await this.writeCommand(cmd);
+    const addrHex = address.toString(16).padStart(8, "0");
+    const sizeHex = data.length.toString(16).padStart(8, "0");
+    await this.writeCommand(`S${addrHex},${sizeHex}#`);
+    await this.delay(5);
 
-    // Workaround: The SAM firmware has a bug if command and data are in same USB packet.
-    // We add a small delay to ensure they are sent separately.
-    await new Promise((resolve) => setTimeout(resolve, 5));
+    const SUB_CHUNK_SIZE = 512;
+    for (let offset = 0; offset < data.length; offset += SUB_CHUNK_SIZE) {
+      const subChunk = data.subarray(
+        offset,
+        Math.min(offset + SUB_CHUNK_SIZE, data.length)
+      );
+      if (this.writer.ready) await this.writer.ready;
+      await this.writer.write(subChunk);
+    }
 
-    // Send Data
-    console.log(`[Bossa] TX Binary: ${data.length} bytes`);
-    await this.writer.write(data);
+    const transmitTimeMs = Math.ceil((data.length * 10 * 1000) / 230400);
+    await this.delay(transmitTimeMs + 20);
   }
 
-  /**
-   * Write buffer to flash - SAM-BA extended protocol (Y command)
-   *
-   * From BOSSA Samba.cpp, the Y command works in TWO steps:
-   * 1. Y[src_addr],0# - Set source address (SRAM buffer) with size=0
-   * 2. Y[dst_addr],[size]# - Write to flash destination
-   *
-   * The bootloader's internal applet copies from src_addr to dst_addr
-   *
-   * @param {number} srcAddr - Source address in SRAM (where S command wrote data)
-   * @param {number} dstAddr - Destination address in flash
-   * @param {number} size - Number of bytes to write
-   */
   async writeBuffer(srcAddr, dstAddr, size) {
-    // Step 1: Set source address (Y[src],0#)
-    const cmd1 = `Y${srcAddr.toString(16).padStart(8, "0")},0#`;
-    await this.writeCommand(cmd1);
+    const srcHex = srcAddr.toString(16).padStart(8, "0");
+    const ySrcStart = Date.now();
+    await this.writeCommand(`Y${srcHex},0#`);
+    const ack1 = await this.readAck("Y", 1000);
+    const ySrcElapsed = Date.now() - ySrcStart;
+    console.log(
+      `[Bossa] Y(src 0x${srcHex}) ${ack1 ? "OK" : "FAIL"} in ${ySrcElapsed}ms`
+    );
+    if (!ack1) console.log(`[Bossa] ❌ Y(src) FAILED`);
 
-    // Minimal delay - just enough for command processing
-    await new Promise((resolve) => setTimeout(resolve, 2));
+    await this.delay(2);
 
-    // Step 2: Execute write to destination (Y[dst],[size]#)
-    const cmd2 = `Y${dstAddr.toString(16).padStart(8, "0")},${size
-      .toString(16)
-      .padStart(8, "0")}#`;
-    await this.writeCommand(cmd2);
-
-    // Flash write delay - 256 bytes takes ~5-10ms on R4
-    await new Promise((resolve) => setTimeout(resolve, 8));
+    const dstHex = dstAddr.toString(16).padStart(8, "0");
+    const sizeHex = size.toString(16).padStart(8, "0");
+    const yFlashStart = Date.now();
+    await this.writeCommand(`Y${dstHex},${sizeHex}#`);
+    const ack2 = await this.readAck("Y", 5000);
+    const yFlashElapsed = Date.now() - yFlashStart;
+    console.log(
+      `[Bossa] Y(flash 0x${dstHex}, ${size} bytes) ${
+        ack2 ? "OK" : "FAIL"
+      } in ${yFlashElapsed}ms`
+    );
+    if (!ack2) console.log(`[Bossa] ❌ Y(flash@0x${dstHex}) FAILED`);
   }
 
-  /**
-   * LEGACY: Simple write flash page (for backwards compatibility)
-   * This is the simpler single-command version that doesn't work correctly
-   * @deprecated Use writeBuffer() instead
-   */
-  async writeFlashPage(address, size) {
-    const cmd = `Y${address.toString(16)},${size.toString(16)}#`;
-    await this.writeCommand(cmd);
-    // Wait for flash write to complete
-    await new Promise((resolve) => setTimeout(resolve, 10));
+  async reset() {
+    console.log(`[Bossa] ═══ RESET ═══`);
+    console.log(`[Bossa] → K#`);
+    await this.writeCommand("K#");
+    const ok = await this.readAck("K", 1000);
+    console.log(`[Bossa] ← K ${ok ? "OK" : "(board reset)"}`);
   }
 
-  /**
-   * Erase flash pages - for SAM-BA extended protocol
-   * Command: X[addr]# - erases pages starting at address
-   */
-  async eraseFlash(address) {
-    const cmd = `X${address.toString(16)}#`;
-    await this.writeCommand(cmd);
-    // Erase takes time
-    await new Promise((resolve) => setTimeout(resolve, 100));
+  async go(address) {
+    const addrHex = address.toString(16).padStart(8, "0");
+    console.log(`[Bossa] → G${addrHex}#`);
+    await this.writeCommand(`G${addrHex}#`);
+  }
+
+  async writeWord(address, value) {
+    const addrHex = address.toString(16).padStart(8, "0");
+    const valHex = value.toString(16).padStart(8, "0");
+    await this.writeCommand(`W${addrHex},${valHex}#`);
+    await this.delay(2);
   }
 
   async readBinary(address, size) {
-    // SAMD Bug Workaround: Limit read size to 63 bytes
     if (this.isSamd && size > 63) {
       const result = new Uint8Array(size);
       let offset = 0;
@@ -505,18 +273,96 @@ export class Bossa {
       }
       return result;
     }
-
-    // Command: R[addr],[size]#
-    const cmd = `R${address.toString(16)},${size.toString(16)}#`;
-    await this.writeCommand(cmd);
-
-    // Read binary response
+    await this.writeCommand(`R${address.toString(16)},${size.toString(16)}#`);
     return await this.readBytes(size, 2000);
   }
 
-  async go(address) {
-    // Command: G[addr]#
-    const cmd = `G${address.toString(16)}#`;
-    await this.writeCommand(cmd);
+  async readBytes(count, timeout = 1000) {
+    const result = new Uint8Array(count);
+    let offset = 0;
+    const startTime = Date.now();
+    while (offset < count) {
+      if (Date.now() - startTime > timeout)
+        throw new Error(`Timeout (got ${offset}/${count})`);
+      const remainingTime = timeout - (Date.now() - startTime);
+      const timeoutPromise = new Promise((_, reject) =>
+        setTimeout(() => reject(new Error("Timeout")), remainingTime)
+      );
+      const { value, done } = await Promise.race([
+        this.reader.read(),
+        timeoutPromise,
+      ]);
+      if (done) throw new Error("Stream closed");
+      if (value) {
+        const toCopy = Math.min(value.length, count - offset);
+        result.set(value.subarray(0, toCopy), offset);
+        offset += toCopy;
+      }
+    }
+    return result;
+  }
+
+  static CRC16_TABLE = [
+    0x0000, 0x1021, 0x2042, 0x3063, 0x4084, 0x50a5, 0x60c6, 0x70e7, 0x8108,
+    0x9129, 0xa14a, 0xb16b, 0xc18c, 0xd1ad, 0xe1ce, 0xf1ef, 0x1231, 0x0210,
+    0x3273, 0x2252, 0x52b5, 0x4294, 0x72f7, 0x62d6, 0x9339, 0x8318, 0xb37b,
+    0xa35a, 0xd3bd, 0xc39c, 0xf3ff, 0xe3de, 0x2462, 0x3443, 0x0420, 0x1401,
+    0x64e6, 0x74c7, 0x44a4, 0x5485, 0xa56a, 0xb54b, 0x8528, 0x9509, 0xe5ee,
+    0xf5cf, 0xc5ac, 0xd58d, 0x3653, 0x2672, 0x1611, 0x0630, 0x76d7, 0x66f6,
+    0x5695, 0x46b4, 0xb75b, 0xa77a, 0x9719, 0x8738, 0xf7df, 0xe7fe, 0xd79d,
+    0xc7bc, 0x48c4, 0x58e5, 0x6886, 0x78a7, 0x0840, 0x1861, 0x2802, 0x3823,
+    0xc9cc, 0xd9ed, 0xe98e, 0xf9af, 0x8948, 0x9969, 0xa90a, 0xb92b, 0x5af5,
+    0x4ad4, 0x7ab7, 0x6a96, 0x1a71, 0x0a50, 0x3a33, 0x2a12, 0xdbfd, 0xcbdc,
+    0xfbbf, 0xeb9e, 0x9b79, 0x8b58, 0xbb3b, 0xab1a, 0x6ca6, 0x7c87, 0x4ce4,
+    0x5cc5, 0x2c22, 0x3c03, 0x0c60, 0x1c41, 0xedae, 0xfd8f, 0xcdec, 0xddcd,
+    0xad2a, 0xbd0b, 0x8d68, 0x9d49, 0x7e97, 0x6eb6, 0x5ed5, 0x4ef4, 0x3e13,
+    0x2e32, 0x1e51, 0x0e70, 0xff9f, 0xefbe, 0xdfdd, 0xcffc, 0xbf1b, 0xaf3a,
+    0x9f59, 0x8f78, 0x9188, 0x81a9, 0xb1ca, 0xa1eb, 0xd10c, 0xc12d, 0xf14e,
+    0xe16f, 0x1080, 0x00a1, 0x30c2, 0x20e3, 0x5004, 0x4025, 0x7046, 0x6067,
+    0x83b9, 0x9398, 0xa3fb, 0xb3da, 0xc33d, 0xd31c, 0xe37f, 0xf35e, 0x02b1,
+    0x1290, 0x22f3, 0x32d2, 0x4235, 0x5214, 0x6277, 0x7256, 0xb5ea, 0xa5cb,
+    0x95a8, 0x8589, 0xf56e, 0xe54f, 0xd52c, 0xc50d, 0x34e2, 0x24c3, 0x14a0,
+    0x0481, 0x7466, 0x6447, 0x5424, 0x4405, 0xa7db, 0xb7fa, 0x8799, 0x97b8,
+    0xe75f, 0xf77e, 0xc71d, 0xd73c, 0x26d3, 0x36f2, 0x0691, 0x16b0, 0x6657,
+    0x7676, 0x4615, 0x5634, 0xd94c, 0xc96d, 0xf90e, 0xe92f, 0x99c8, 0x89e9,
+    0xb98a, 0xa9ab, 0x5844, 0x4865, 0x7806, 0x6827, 0x18c0, 0x08e1, 0x3882,
+    0x28a3, 0xcb7d, 0xdb5c, 0xeb3f, 0xfb1e, 0x8bf9, 0x9bd8, 0xabbb, 0xbb9a,
+    0x4a75, 0x5a54, 0x6a37, 0x7a16, 0x0af1, 0x1ad0, 0x2ab3, 0x3a92, 0xfd2e,
+    0xed0f, 0xdd6c, 0xcd4d, 0xbdaa, 0xad8b, 0x9de8, 0x8dc9, 0x7c26, 0x6c07,
+    0x5c64, 0x4c45, 0x3ca2, 0x2c83, 0x1ce0, 0x0cc1, 0xef1f, 0xff3e, 0xcf5d,
+    0xdf7c, 0xaf9b, 0xbfba, 0x8fd9, 0x9ff8, 0x6e17, 0x7e36, 0x4e55, 0x5e74,
+    0x2e93, 0x3eb2, 0x0ed1, 0x1ef0,
+  ];
+
+  static calculateCRC16(data) {
+    let crc = 0;
+    for (let i = 0; i < data.length; i++) {
+      crc =
+        ((crc << 8) ^ Bossa.CRC16_TABLE[((crc >> 8) ^ data[i]) & 0xff]) &
+        0xffff;
+    }
+    return crc;
+  }
+
+  async verifyCRC(address, size, expectedData) {
+    const addrHex = address.toString(16).padStart(8, "0");
+    const sizeHex = size.toString(16).padStart(8, "0");
+    await this.delay(100);
+    await this.flush(50);
+    await this.writeCommand(`Z${addrHex},${sizeHex}#`);
+    try {
+      const response = await this.readUntilTerminator({
+        timeout: 5000,
+        maxBytes: 16,
+      });
+      const responseStr = String.fromCharCode(...response);
+      const match = responseStr.match(/Z([0-9A-Fa-f]{8})#/);
+      if (!match) return false;
+      const flashCRC = parseInt(match[1], 16);
+      const expectedCRC = Bossa.calculateCRC16(expectedData.slice(0, size));
+      return flashCRC === expectedCRC;
+    } catch (e) {
+      return false;
+    }
   }
 }

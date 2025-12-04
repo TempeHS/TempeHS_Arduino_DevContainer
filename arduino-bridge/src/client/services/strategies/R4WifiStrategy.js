@@ -1,23 +1,31 @@
 import { Bossa } from "../protocols/Bossa.js";
 
 /**
- * BOSSA Upload Strategy for Arduino UNO R4 WiFi
+ * R4 WiFi Upload Strategy using BOSSA/SAM-BA Protocol
  *
- * KNOWN LIMITATION: Web Serial API does not reliably trigger bootloader entry
- * ===========================================================================
- * The 1200 baud touch requires USB CDC SET_LINE_CODING control transfers.
- * Web Serial may not send these properly, so the ESP32-S3 bridge doesn't
- * receive the signal to reset the RA4M1 into bootloader mode.
+ * This strategy handles firmware uploads to Arduino UNO R4 WiFi boards via Web Serial API.
+ * The R4 WiFi uses an ESP32-S3 as a USB bridge to the Renesas RA4M1 microcontroller.
  *
- * ADDITIONAL ISSUE: Even in bootloader mode, the ESP32-S3 bridge may not
- * update its internal UART baud rate when we change the USB CDC baud rate.
+ * BOOTLOADER ENTRY: Works reliably via 1200 baud touch
+ * =======================================================
+ * The 1200 baud touch sequence successfully triggers bootloader mode:
+ *   1. Open port at 1200 baud with DTR=1, RTS=1
+ *   2. Toggle DTR=0 to trigger reset
+ *   3. Close port and wait ~500ms for RA4M1 to enter bootloader
+ *   4. Reconnect at 230400 baud for BOSSA protocol
  *
- * WORKAROUND: User must manually double-tap RESET button to enter bootloader,
- * and we try multiple baud rates to find one that works.
+ * PROTOCOL: SAM-BA Extended (BOSSA)
+ * ==================================
+ * - Baud rate: 230400 (confirmed via Wireshark capture)
+ * - Commands: N#, V#, S#, Y#, G# (see Bossa.js for details)
+ * - Flash offset: 0x4000 (bootloader adds SKETCH_FLASH_OFFSET internally)
+ *
+ * SOURCE OF TRUTH:
+ * @see https://github.com/arduino/arduino-renesas-bootloader/blob/main/src/bossa.c
  */
-export class BOSSAStrategy {
+export class R4WifiStrategy {
   constructor() {
-    this.name = "BOSSA (SAMD/Renesas)";
+    this.name = "R4 WiFi (BOSSA/SAM-BA)";
 
     // R4 WiFi bootloader confirmed at 230400 from Wireshark capture
     this.PRIMARY_BAUD = 230400;
@@ -64,29 +72,44 @@ export class BOSSAStrategy {
 
   /**
    * Perform the 1200 baud touch sequence to enter bootloader mode
+   *
+   * From USB capture (R4.pcapng):
+   *   Frame 2589: SET_LINE_CODING = 1200
+   *   Frame 2593: SET_CONTROL_LINE_STATE = DTR=1, RTS=1
+   *   Frame 2595: SET_LINE_CODING = 1200 (again!)
+   *   Frame 2601: SET_CONTROL_LINE_STATE = DTR=0, RTS=1
+   *   (wait ~500ms)
    */
   async perform1200Touch(port) {
-    console.log("[BOSSA] === 1200 BAUD TOUCH ===");
-    console.log("[BOSSA] NOTE: This may not work with Web Serial API");
+    console.log("[BOSSA] === 1200 BAUD TOUCH (matching USB capture) ===");
 
     await this.safeClose(port);
 
-    console.log("[BOSSA] Opening at 1200 baud...");
+    // Step 1: First SET_LINE_CODING at 1200 baud
+    console.log("[BOSSA] Opening at 1200 baud (first SET_LINE_CODING)...");
     await port.open({ baudRate: this.TOUCH_BAUD });
 
+    // Step 2: SET_CONTROL_LINE_STATE = DTR=1, RTS=1 (0x0003)
     console.log("[BOSSA] Setting DTR=1, RTS=1");
     await port.setSignals({ dataTerminalReady: true, requestToSend: true });
-    await new Promise((r) => setTimeout(r, 50));
 
+    // Step 3: Second SET_LINE_CODING at 1200 (close and reopen to force)
+    console.log("[BOSSA] Forcing second SET_LINE_CODING...");
+    await port.close();
+    await new Promise((r) => setTimeout(r, 10));
+    await port.open({ baudRate: this.TOUCH_BAUD });
+
+    // Step 4: SET_CONTROL_LINE_STATE = DTR=0, RTS=1 (0x0002) - triggers reset
     console.log("[BOSSA] Setting DTR=0, RTS=1 (trigger reset)");
     await port.setSignals({ dataTerminalReady: false, requestToSend: true });
-    await new Promise((r) => setTimeout(r, 50));
 
+    // Close port
     console.log("[BOSSA] Closing port after touch");
     await port.close();
 
-    console.log("[BOSSA] Waiting 600ms for device reset...");
-    await new Promise((r) => setTimeout(r, 600));
+    // Wait ~500ms for device reset (matching USB capture timing)
+    console.log("[BOSSA] Waiting 500ms for device reset...");
+    await new Promise((r) => setTimeout(r, 500));
 
     console.log("[BOSSA] 1200 baud touch complete");
   }
@@ -158,6 +181,24 @@ export class BOSSAStrategy {
         if (done) break;
 
         if (value && value.length) {
+          // Log every byte received
+          const rxTime = new Date().toISOString().slice(11, 23);
+          const hex = Array.from(value)
+            .map((b) => b.toString(16).padStart(2, "0"))
+            .join(" ");
+          const asciiDetail = Array.from(value)
+            .map((b) => {
+              if (b === 0x0a) return "<LF>";
+              if (b === 0x0d) return "<CR>";
+              if (b >= 0x20 && b <= 0x7e) return String.fromCharCode(b);
+              return `<0x${b.toString(16).padStart(2, "0")}>`;
+            })
+            .join("");
+          console.log(
+            `[BOSSA ${rxTime}] 📥 Probe RX (${value.length} bytes): ${hex}`
+          );
+          console.log(`[BOSSA ${rxTime}] 📥 Probe ASCII: ${asciiDetail}`);
+
           collected.push(...value);
 
           // As soon as we have enough bytes, check if ASCII
@@ -350,6 +391,10 @@ export class BOSSAStrategy {
   async waitForAnyData(reader, timeoutMs) {
     const collected = [];
     const startTime = Date.now();
+    const timestamp = new Date().toISOString().slice(11, 23);
+    console.log(
+      `[BOSSA ${timestamp}] Waiting for data (timeout: ${timeoutMs}ms)...`
+    );
 
     try {
       while (Date.now() - startTime < timeoutMs) {
@@ -374,6 +419,22 @@ export class BOSSAStrategy {
         if (done) break;
 
         if (value && value.length) {
+          const rxTime = new Date().toISOString().slice(11, 23);
+          const hex = Array.from(value)
+            .map((b) => b.toString(16).padStart(2, "0"))
+            .join(" ");
+          const asciiDetail = Array.from(value)
+            .map((b) => {
+              if (b === 0x0a) return "<LF>";
+              if (b === 0x0d) return "<CR>";
+              if (b >= 0x20 && b <= 0x7e) return String.fromCharCode(b);
+              return `<0x${b.toString(16).padStart(2, "0")}>`;
+            })
+            .join("");
+          console.log(
+            `[BOSSA ${rxTime}] 📥 RX (${value.length} bytes): ${hex}`
+          );
+          console.log(`[BOSSA ${rxTime}] 📥 RX ASCII: ${asciiDetail}`);
           collected.push(...value);
           // Got some data, wait a bit more for complete response
           await new Promise((r) => setTimeout(r, 50));
@@ -383,6 +444,7 @@ export class BOSSAStrategy {
       console.warn(`[BOSSA] Read error: ${e.message}`);
     }
 
+    const elapsed = Date.now() - startTime;
     if (collected.length > 0) {
       const bytes = new Uint8Array(collected);
       const hex = Array.from(bytes)
@@ -391,9 +453,13 @@ export class BOSSAStrategy {
       const ascii = Array.from(bytes)
         .map((b) => (b >= 0x20 && b <= 0x7e ? String.fromCharCode(b) : "."))
         .join("");
+      console.log(
+        `[BOSSA] ✅ Received ${collected.length} bytes in ${elapsed}ms`
+      );
       return { gotData: true, bytes, hex, ascii };
     }
 
+    console.log(`[BOSSA] ⏱️ No data received after ${elapsed}ms`);
     return { gotData: false };
   }
 
@@ -441,9 +507,20 @@ export class BOSSAStrategy {
 
     try {
       await this.safeClose(port);
+
+      // USB capture shows SET_LINE_CODING sent twice at 230400
+      // First open
       await port.open({ baudRate: this.PRIMARY_BAUD });
       await port.setSignals({ dataTerminalReady: true, requestToSend: true });
-      await new Promise((r) => setTimeout(r, 100));
+
+      // Force second SET_LINE_CODING by closing and reopening
+      await port.close();
+      await new Promise((r) => setTimeout(r, 10));
+      await port.open({ baudRate: this.PRIMARY_BAUD });
+      await port.setSignals({ dataTerminalReady: true, requestToSend: true });
+
+      // Wait ~111ms before N# (matching USB capture)
+      await new Promise((r) => setTimeout(r, 110));
 
       bossa = new Bossa(port);
       await bossa.connect();
@@ -582,15 +659,45 @@ export class BOSSAStrategy {
       let sramBufferA = 0x20001000; // SRAM buffer A address
       let sramBufferB = 0x20001100; // SRAM buffer B address (for double-buffering)
 
+      // Flash offset configuration for R4 WiFi
+      // User code starts at 0x4000 (bootloader occupies 0x0000-0x3FFF)
+      let flashWriteOffset = offset; // Where to write firmware
+      let goOffset = offset; // Where to jump for execution
+
       if (fqbn && fqbn.includes("renesas_uno")) {
-        offset = 0x4000; // Uno R4 flash starts at 0x4000
-        // R4 SRAM starts at 0x20000000, bootloader uses buffer area
-        // Based on BOSSA Device.cpp for similar Cortex-M4 devices
-        sramBufferA = 0x20001000;
-        sramBufferB = 0x20001100;
+        // R4 WiFi: Protocol discovered from Wireshark USB capture + bootloader source code
+        //
+        // From arduino-renesas-bootloader/src/bossa.c:
+        // =============================================
+        // - S command: writes to internal data_buffer[8192], addr is OFFSET into buffer
+        // - Y command: copies from data_buffer to flash at SKETCH_FLASH_OFFSET + addr
+        // - SKETCH_FLASH_OFFSET = 0x4000 (16KB) for non-DFU boards
+        // - Flash write is blocking (interrupts disabled during R_FLASH_LP_Write)
+        // - ACK "Y\n\r" sent AFTER flash write completes
+        //
+        // Protocol sequence from Wireshark capture:
+        //   S00000034,00001000# (write 0x1000 bytes to data_buffer[0x34])
+        //   Y00000034,0#        (set copyOffset = 0x34)  -> Y\n\r ACK
+        //   Y00000000,00001000# (write to flash 0x4000)  -> Y\n\r ACK
+        //   ...repeat for each 0x1000 chunk at 0x1000, 0x2000, 0x3000...
+        //   G00004000#          (jump to user code at 0x4000)
+        //
+        // NOTE: Y command address 0x0000 writes to physical flash 0x4000 (bootloader adds offset)
+        //
+        flashWriteOffset = 0x0000; // Y command offset (bootloader adds 0x4000)
+        goOffset = 0x4000; // User code entry point (G command uses absolute address)
+
+        // SRAM buffer offset at 0x34 - offset into bootloader's data_buffer[8192]
+        sramBufferA = 0x34;
+        sramBufferB = 0x34; // Same buffer, no double-buffering
       }
-      console.log(`[BOSSA] Flash offset: 0x${offset.toString(16)}`);
-      console.log(`[BOSSA] SRAM buffer: 0x${sramBufferA.toString(16)}`);
+      console.log(
+        `[BOSSA] Flash write offset: 0x${flashWriteOffset.toString(
+          16
+        )} (physical: 0x${(flashWriteOffset + 0x4000).toString(16)})`
+      );
+      console.log(`[BOSSA] Execution (go) offset: 0x${goOffset.toString(16)}`);
+      console.log(`[BOSSA] data_buffer offset: 0x${sramBufferA.toString(16)}`);
 
       const firmware = new Uint8Array(data);
       const totalBytes = firmware.length;
@@ -606,62 +713,84 @@ export class BOSSAStrategy {
         `[BOSSA] Erasing ${pagesToErase} pages (${totalBytes} bytes)`
       );
 
-      // Send erase command: X[addr]#
-      // The Arduino bootloader uses 'X' for erase
-      await bossa.writeCommand(`X${offset.toString(16)}#`);
+      // Use the chipErase method which properly waits for X command ACK
+      // X command also has internal 0x4000 offset added by bootloader
+      await bossa.chipErase(flashWriteOffset);
 
-      // Wait for erase to complete (can take a few seconds)
-      await new Promise((r) => setTimeout(r, 2000));
+      // Skip W commands for now - they may only be needed for applet-based approach
+      // The direct SAM-BA Y command should work without flash register config
+      // If this doesn't work, we may need to implement the applet approach
+      console.log(`[BOSSA] Flash erased, starting write...`);
 
-      // Flush any response
-      await bossa.flush(200);
-
-      // Step 2: Write flash in page-sized chunks
-      // SAM-BA extended protocol flow:
-      // 1. S[sram_addr],[size]# - Write data to SRAM buffer
-      // 2. Y[sram_addr],0# - Set source address
-      // 3. Y[flash_addr],[size]# - Copy from SRAM to flash
-      const flashPageSize = 256; // Flash page size for programming
+      // Step 2: Write flash in chunks
+      //
+      // SAM-BA R4 WiFi protocol (from bootloader source):
+      // 1. S[buffer_offset],[size]# - Write data to bootloader's data_buffer[]
+      // 2. Y[buffer_offset],0# - Set copyOffset (where to copy FROM in data_buffer)
+      // 3. Y[flash_offset],[size]# - Write from data_buffer to flash
+      //    (bootloader adds SKETCH_FLASH_OFFSET internally: physical_addr = 0x4000 + flash_offset)
+      //
+      // Using 2048-byte (0x800) chunks to match PROGRAM_BLOCK_SIZE
+      // This ensures each Y write aligns with bootloader's erase granularity
+      // (bootloader erases 2 blocks = 4KB when address % 0x800 == 0)
+      const chunkSize = 2048;
+      const numChunks = Math.ceil(totalBytes / chunkSize);
       console.log(
-        `[BOSSA] Writing ${totalBytes} bytes in ${flashPageSize}-byte pages...`
+        `[BOSSA] Writing ${totalBytes} bytes in ${numChunks} chunks (${chunkSize} bytes each)...`
       );
       if (progressCallback) progressCallback(15, "Writing flash...");
 
-      let flashAddr = offset;
-      let useBufferA = true; // Alternate between buffers for double-buffering
+      // flashAddr is the Y command flash offset (bootloader adds 0x4000)
+      let flashAddr = flashWriteOffset;
+      // sramBuffer is the offset into bootloader's data_buffer[8192]
+      const sramBuffer = sramBufferA;
 
-      for (let i = 0; i < totalBytes; i += flashPageSize) {
-        const chunk = firmware.subarray(
-          i,
-          Math.min(i + flashPageSize, totalBytes)
+      for (let i = 0; i < totalBytes; i += chunkSize) {
+        const chunkNum = Math.floor(i / chunkSize) + 1;
+        const chunk = firmware.subarray(i, Math.min(i + chunkSize, totalBytes));
+
+        // Log: CHUNK #/total @ flash_addr (size bytes)
+        console.log(
+          `[BOSSA] CHUNK ${chunkNum}/${numChunks} @ 0x${flashAddr.toString(
+            16
+          )} (${chunk.length}B)`
         );
 
-        // Select buffer address
-        const sramBuffer = useBufferA ? sramBufferA : sramBufferB;
-
-        // Step 2a: Write chunk to SRAM buffer
-        // S[sram_buffer],[size]# + binary data
+        // Write to SRAM buffer, then commit to flash
         await bossa.writeBinary(sramBuffer, chunk);
-
-        // Step 2b: Commit SRAM buffer to flash using writeBuffer
-        // This sends: Y[src],0# then Y[dst],[size]#
         await bossa.writeBuffer(sramBuffer, flashAddr, chunk.length);
 
         flashAddr += chunk.length;
-        useBufferA = !useBufferA; // Alternate buffers
 
         const percent = 15 + Math.round((i / totalBytes) * 80);
-        if (progressCallback) progressCallback(percent, "Writing flash...");
+        if (progressCallback)
+          progressCallback(percent, `Chunk ${chunkNum}/${numChunks}`);
 
-        // Small delay between pages
-        await new Promise((r) => setTimeout(r, 5));
+        // Small delay between chunks
+        await new Promise((resolve) => setTimeout(resolve, 20));
       }
 
-      console.log("[BOSSA] Write complete, resetting device...");
+      // Wait for flash operations to fully complete before reset
+      // For larger sketches, flash LP might need extra time to finish all writes
+      console.log("[BOSSA] Waiting for flash operations to complete...");
+      await new Promise((resolve) => setTimeout(resolve, 500));
+
+      // NOTE: CRC verification via Z command times out on R4 WiFi bootloader
+      // The bootloader seems to not respond to Z commands after Y writes
+      // For now, we skip verification and trust the Y ACKs
+      // TODO: Investigate why Z command doesn't respond
+      console.log(
+        "[BOSSA] Skipping CRC verification (Z command not responding)"
+      );
+      if (progressCallback) progressCallback(96, "Finalizing...");
+
+      console.log("[BOSSA] Resetting device to run new firmware...");
       if (progressCallback) progressCallback(98, "Resetting...");
 
-      // Reset the device to run the new firmware
-      await bossa.go(offset);
+      // Use K# command (system reset) instead of G# (jump)
+      // This is what Arduino IDE uses - triggers NVIC_SystemReset()
+      // After reset, bootloader validates and boots user code properly
+      await bossa.reset();
 
       if (progressCallback) progressCallback(100, "Complete!");
       console.log("[BOSSA] Upload successful!");

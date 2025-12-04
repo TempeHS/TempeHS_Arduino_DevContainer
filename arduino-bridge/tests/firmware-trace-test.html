@@ -1,0 +1,448 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Firmware Protocol Trace Test</title>
+    <style>
+      * {
+        box-sizing: border-box;
+      }
+      body {
+        font-family: "Segoe UI", Tahoma, Geneva, Verdana, sans-serif;
+        margin: 0;
+        padding: 20px;
+        background: #1e1e2e;
+        color: #cdd6f4;
+      }
+      h1 {
+        color: #89b4fa;
+        margin-bottom: 10px;
+      }
+      .subtitle {
+        color: #a6adc8;
+        margin-bottom: 20px;
+      }
+      .controls {
+        background: #313244;
+        padding: 15px;
+        border-radius: 8px;
+        margin-bottom: 20px;
+      }
+      .controls label {
+        display: block;
+        margin-bottom: 10px;
+      }
+      .controls select,
+      .controls input {
+        background: #45475a;
+        border: 1px solid #585b70;
+        color: #cdd6f4;
+        padding: 8px 12px;
+        border-radius: 4px;
+        width: 300px;
+      }
+      button {
+        background: #89b4fa;
+        color: #1e1e2e;
+        border: none;
+        padding: 10px 20px;
+        border-radius: 4px;
+        cursor: pointer;
+        font-weight: bold;
+        font-size: 14px;
+        margin-right: 10px;
+      }
+      button:hover {
+        background: #b4befe;
+      }
+      button:disabled {
+        background: #585b70;
+        cursor: not-allowed;
+      }
+      button.secondary {
+        background: #313244;
+        color: #cdd6f4;
+      }
+      .status {
+        margin-top: 15px;
+        padding: 10px;
+        border-radius: 4px;
+        font-family: monospace;
+      }
+      .status.running {
+        background: #313244;
+        border-left: 4px solid #f9e2af;
+      }
+      .status.success {
+        background: #1e3a29;
+        border-left: 4px solid #a6e3a1;
+      }
+      .status.error {
+        background: #3a1e1e;
+        border-left: 4px solid #f38ba8;
+      }
+      .info-panel {
+        background: #313244;
+        padding: 15px;
+        border-radius: 8px;
+        margin-bottom: 20px;
+      }
+      .info-panel h3 {
+        margin-top: 0;
+        color: #cba6f7;
+      }
+      .info-grid {
+        display: grid;
+        grid-template-columns: repeat(4, 1fr);
+        gap: 15px;
+      }
+      .info-item {
+      }
+      .info-item .label {
+        color: #6c7086;
+        font-size: 12px;
+      }
+      .info-item .value {
+        font-size: 18px;
+        font-weight: bold;
+        color: #cdd6f4;
+      }
+      .trace-container {
+        background: #11111b;
+        border-radius: 8px;
+        margin-top: 20px;
+        overflow: hidden;
+      }
+      .trace-header {
+        background: #313244;
+        padding: 10px 15px;
+        font-weight: bold;
+        border-left: 4px solid #89b4fa;
+      }
+      .trace-content {
+        height: 500px;
+        overflow-y: auto;
+        font-family: "Consolas", "Monaco", monospace;
+        font-size: 11px;
+        padding: 10px;
+      }
+      .trace-entry {
+        padding: 2px 5px;
+        border-radius: 2px;
+        margin-bottom: 1px;
+      }
+      .trace-entry.tx {
+        background: rgba(137, 180, 250, 0.1);
+        border-left: 2px solid #89b4fa;
+      }
+      .trace-entry.rx {
+        background: rgba(166, 227, 161, 0.1);
+        border-left: 2px solid #a6e3a1;
+      }
+      .trace-time {
+        color: #6c7086;
+        margin-right: 10px;
+      }
+      .trace-dir {
+        font-weight: bold;
+        margin-right: 10px;
+      }
+      .trace-dir.tx {
+        color: #89b4fa;
+      }
+      .trace-dir.rx {
+        color: #a6e3a1;
+      }
+      .chunk-marker {
+        color: #cba6f7;
+        font-style: italic;
+      }
+      pre {
+        margin: 0;
+        white-space: pre-wrap;
+      }
+    </style>
+  </head>
+  <body>
+    <h1>🔬 Firmware Protocol Trace Test</h1>
+    <p class="subtitle">Test actual firmware uploads with trace capture</p>
+
+    <div class="controls">
+      <label>
+        Select Firmware:
+        <select id="firmwareSelect">
+          <option value="">-- Select a compiled sketch --</option>
+          <option value="demo_blink">demo_blink (WORKS - ~50KB)</option>
+          <option value="demo_servo">demo_servo (FAILS - ~54KB)</option>
+          <option value="demo_plotter">demo_plotter (FAILS - ~61KB)</option>
+        </select>
+      </label>
+      <div style="margin-top: 15px">
+        <button id="loadBtn" onclick="loadFirmware()">📂 Load Firmware</button>
+        <button id="runBtn" onclick="runTrace()" disabled>
+          ▶ Run Protocol Trace
+        </button>
+        <button class="secondary" onclick="exportTrace()">
+          📋 Export Trace
+        </button>
+      </div>
+    </div>
+
+    <div id="status" class="status" style="display: none"></div>
+
+    <div id="infoPanel" class="info-panel" style="display: none">
+      <h3>📦 Firmware Info</h3>
+      <div class="info-grid">
+        <div class="info-item">
+          <div class="label">Sketch</div>
+          <div class="value" id="infoSketch">-</div>
+        </div>
+        <div class="info-item">
+          <div class="label">Size</div>
+          <div class="value" id="infoSize">-</div>
+        </div>
+        <div class="info-item">
+          <div class="label">Chunks (2KB)</div>
+          <div class="value" id="infoChunks">-</div>
+        </div>
+        <div class="info-item">
+          <div class="label">Flash End Address</div>
+          <div class="value" id="infoEndAddr">-</div>
+        </div>
+      </div>
+    </div>
+
+    <div class="trace-container">
+      <div class="trace-header">📊 Protocol Trace</div>
+      <div class="trace-content" id="traceOutput">
+        <div style="color: #6c7086; padding: 20px; text-align: center">
+          Load a firmware file to begin tracing
+        </div>
+      </div>
+    </div>
+
+    <script type="module">
+      import { Bossa } from "../src/client/services/protocols/Bossa.js";
+      import { MockSerialPort } from "./browser-trace-test.js";
+
+      let firmwareData = null;
+      let firmwareName = null;
+      let traceLog = [];
+
+      window.loadFirmware = async function () {
+        const select = document.getElementById("firmwareSelect");
+        const sketch = select.value;
+
+        if (!sketch) {
+          alert("Please select a firmware");
+          return;
+        }
+
+        const statusEl = document.getElementById("status");
+        statusEl.style.display = "block";
+        statusEl.className = "status running";
+        statusEl.textContent = `⏳ Loading ${sketch} firmware...`;
+
+        try {
+          // Fetch from API (port 3001) via Vite proxy - BUILD_ROOT is already build/sketches
+          const response = await fetch(
+            `/artifacts/${sketch}/${sketch}.ino.bin`
+          );
+          if (!response.ok) {
+            throw new Error(
+              `Failed to load: ${response.status} ${response.statusText}`
+            );
+          }
+
+          const arrayBuffer = await response.arrayBuffer();
+          firmwareData = new Uint8Array(arrayBuffer);
+          firmwareName = sketch;
+
+          // Update info panel
+          document.getElementById("infoPanel").style.display = "block";
+          document.getElementById("infoSketch").textContent = sketch;
+          document.getElementById(
+            "infoSize"
+          ).textContent = `${firmwareData.length.toLocaleString()} bytes (${(
+            firmwareData.length / 1024
+          ).toFixed(1)} KB)`;
+          document.getElementById("infoChunks").textContent = Math.ceil(
+            firmwareData.length / 2048
+          );
+          document.getElementById("infoEndAddr").textContent = `0x${(
+            0x4000 + firmwareData.length
+          ).toString(16)}`;
+
+          document.getElementById("runBtn").disabled = false;
+          statusEl.className = "status success";
+          statusEl.textContent = `✅ Loaded ${sketch}: ${firmwareData.length} bytes`;
+        } catch (e) {
+          statusEl.className = "status error";
+          statusEl.textContent = `❌ Error: ${e.message}`;
+          console.error(e);
+        }
+      };
+
+      window.runTrace = async function () {
+        if (!firmwareData) {
+          alert("Load firmware first");
+          return;
+        }
+
+        const statusEl = document.getElementById("status");
+        const runBtn = document.getElementById("runBtn");
+        const traceOutput = document.getElementById("traceOutput");
+
+        statusEl.className = "status running";
+        statusEl.textContent = "⏳ Running protocol trace...";
+        runBtn.disabled = true;
+        traceLog = [];
+        traceOutput.innerHTML = "";
+
+        const CHUNK_SIZE = 2048;
+        const SRAM_OFFSET = 0x34;
+
+        // Create mock port with trace capture
+        const mockPort = new MockSerialPort({
+          name: firmwareName,
+          verbose: false,
+        });
+
+        try {
+          const bossa = new Bossa(mockPort);
+          await mockPort.open({ baudRate: 230400 });
+          await bossa.connect();
+
+          addTraceMarker("=== HANDSHAKE ===");
+          await bossa.hello({ attempts: 1, proceedOnFailure: true });
+
+          addTraceMarker("=== ERASE ===");
+          await bossa.chipErase(0);
+
+          addTraceMarker("=== FLASH WRITE ===");
+          let flashAddr = 0;
+          let chunkNum = 0;
+          const totalChunks = Math.ceil(firmwareData.length / CHUNK_SIZE);
+
+          for (let i = 0; i < firmwareData.length; i += CHUNK_SIZE) {
+            chunkNum++;
+            const chunk = firmwareData.subarray(
+              i,
+              Math.min(i + CHUNK_SIZE, firmwareData.length)
+            );
+
+            addTraceMarker(
+              `--- Chunk ${chunkNum}/${totalChunks} @ 0x${flashAddr.toString(
+                16
+              )} (${chunk.length} bytes) ---`
+            );
+
+            await bossa.writeBinary(SRAM_OFFSET, chunk);
+            await bossa.writeBuffer(SRAM_OFFSET, flashAddr, chunk.length);
+            flashAddr += chunk.length;
+
+            // Update status
+            const pct = Math.round((i / firmwareData.length) * 100);
+            statusEl.textContent = `⏳ Chunk ${chunkNum}/${totalChunks} (${pct}%)`;
+          }
+
+          addTraceMarker("=== RESET ===");
+          await new Promise((r) => setTimeout(r, 100));
+          await bossa.reset();
+          await bossa.disconnect();
+
+          // Display trace
+          displayTrace(mockPort.trace);
+
+          statusEl.className = "status success";
+          statusEl.textContent = `✅ Trace complete: ${mockPort.trace.length} operations, ${totalChunks} chunks`;
+        } catch (e) {
+          statusEl.className = "status error";
+          statusEl.textContent = `❌ Error: ${e.message}`;
+          console.error(e);
+          displayTrace(mockPort.trace);
+        }
+
+        runBtn.disabled = false;
+      };
+
+      function addTraceMarker(text) {
+        traceLog.push({ type: "marker", text, time: Date.now() });
+      }
+
+      function displayTrace(trace) {
+        const output = document.getElementById("traceOutput");
+        let html = "";
+        let markerIdx = 0;
+
+        for (const entry of trace) {
+          // Insert markers at appropriate times
+          while (
+            markerIdx < traceLog.length &&
+            traceLog[markerIdx].time <= entry.timestamp
+          ) {
+            html += `<div class="trace-entry chunk-marker">${traceLog[markerIdx].text}</div>`;
+            markerIdx++;
+          }
+
+          const dirClass = entry.direction.toLowerCase();
+          const timeStr = `[${String(entry.time).padStart(6)}]`;
+
+          // Truncate long binary data
+          let dataStr = entry.ascii;
+          if (dataStr.length > 100) {
+            dataStr =
+              dataStr.substring(0, 100) +
+              `... (${entry.bytes.length} bytes total)`;
+          }
+
+          html +=
+            `<div class="trace-entry ${dirClass}">` +
+            `<span class="trace-time">${timeStr}</span>` +
+            `<span class="trace-dir ${dirClass}">${entry.direction}</span>` +
+            `<span class="trace-data">${escapeHtml(dataStr)}</span>` +
+            `</div>`;
+        }
+
+        // Add remaining markers
+        while (markerIdx < traceLog.length) {
+          html += `<div class="trace-entry chunk-marker">${traceLog[markerIdx].text}</div>`;
+          markerIdx++;
+        }
+
+        output.innerHTML = html;
+      }
+
+      function escapeHtml(str) {
+        return str
+          .replace(/&/g, "&amp;")
+          .replace(/</g, "&lt;")
+          .replace(/>/g, "&gt;");
+      }
+
+      window.exportTrace = function () {
+        const output = document.getElementById("traceOutput");
+        if (
+          !output.textContent ||
+          output.textContent.includes("Load a firmware")
+        ) {
+          alert("Run a trace first");
+          return;
+        }
+
+        const text = Array.from(output.querySelectorAll(".trace-entry"))
+          .map((el) => el.textContent)
+          .join("\n");
+
+        const blob = new Blob([text], { type: "text/plain" });
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement("a");
+        a.href = url;
+        a.download = `trace-${firmwareName}-${Date.now()}.txt`;
+        a.click();
+        URL.revokeObjectURL(url);
+      };
+    </script>
+  </body>
+</html>

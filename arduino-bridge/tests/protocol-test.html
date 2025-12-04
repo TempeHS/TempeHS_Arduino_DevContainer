@@ -1,0 +1,533 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>BOSSA Protocol Trace Test</title>
+    <style>
+      * {
+        box-sizing: border-box;
+      }
+      body {
+        font-family: "Segoe UI", Tahoma, Geneva, Verdana, sans-serif;
+        margin: 0;
+        padding: 20px;
+        background: #1e1e2e;
+        color: #cdd6f4;
+      }
+      h1 {
+        color: #89b4fa;
+        margin-bottom: 10px;
+      }
+      .subtitle {
+        color: #a6adc8;
+        margin-bottom: 20px;
+      }
+      .controls {
+        background: #313244;
+        padding: 15px;
+        border-radius: 8px;
+        margin-bottom: 20px;
+      }
+      .controls label {
+        display: inline-block;
+        margin-right: 20px;
+      }
+      .controls input {
+        background: #45475a;
+        border: 1px solid #585b70;
+        color: #cdd6f4;
+        padding: 8px 12px;
+        border-radius: 4px;
+        width: 120px;
+      }
+      button {
+        background: #89b4fa;
+        color: #1e1e2e;
+        border: none;
+        padding: 10px 20px;
+        border-radius: 4px;
+        cursor: pointer;
+        font-weight: bold;
+        font-size: 14px;
+      }
+      button:hover {
+        background: #b4befe;
+      }
+      button:disabled {
+        background: #585b70;
+        cursor: not-allowed;
+      }
+      .status {
+        margin-top: 15px;
+        padding: 10px;
+        border-radius: 4px;
+        font-family: monospace;
+      }
+      .status.running {
+        background: #313244;
+        border-left: 4px solid #f9e2af;
+      }
+      .status.success {
+        background: #1e3a29;
+        border-left: 4px solid #a6e3a1;
+      }
+      .status.error {
+        background: #3a1e1e;
+        border-left: 4px solid #f38ba8;
+      }
+      .output-container {
+        display: flex;
+        gap: 20px;
+        margin-top: 20px;
+      }
+      .trace-panel {
+        flex: 1;
+        background: #11111b;
+        border-radius: 8px;
+        overflow: hidden;
+      }
+      .trace-header {
+        background: #313244;
+        padding: 10px 15px;
+        font-weight: bold;
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+      }
+      .trace-header.reference {
+        border-left: 4px solid #89b4fa;
+      }
+      .trace-header.actual {
+        border-left: 4px solid #a6e3a1;
+      }
+      .trace-content {
+        height: 400px;
+        overflow-y: auto;
+        font-family: "Consolas", "Monaco", monospace;
+        font-size: 12px;
+        padding: 10px;
+      }
+      .trace-entry {
+        padding: 2px 5px;
+        border-radius: 2px;
+        margin-bottom: 1px;
+      }
+      .trace-entry.tx {
+        background: rgba(137, 180, 250, 0.1);
+        border-left: 2px solid #89b4fa;
+      }
+      .trace-entry.rx {
+        background: rgba(166, 227, 161, 0.1);
+        border-left: 2px solid #a6e3a1;
+      }
+      .trace-entry.diff {
+        background: rgba(243, 139, 168, 0.2);
+        border-left: 2px solid #f38ba8;
+      }
+      .trace-time {
+        color: #6c7086;
+        margin-right: 10px;
+      }
+      .trace-dir {
+        font-weight: bold;
+        margin-right: 10px;
+      }
+      .trace-dir.tx {
+        color: #89b4fa;
+      }
+      .trace-dir.rx {
+        color: #a6e3a1;
+      }
+      .comparison-panel {
+        margin-top: 20px;
+        background: #11111b;
+        border-radius: 8px;
+        overflow: hidden;
+      }
+      .comparison-header {
+        background: #313244;
+        padding: 10px 15px;
+        font-weight: bold;
+        border-left: 4px solid #cba6f7;
+      }
+      .comparison-content {
+        max-height: 300px;
+        overflow-y: auto;
+        padding: 10px;
+        font-family: monospace;
+        font-size: 12px;
+      }
+      .diff-row {
+        display: grid;
+        grid-template-columns: 50px 40px 1fr 1fr 100px;
+        gap: 10px;
+        padding: 3px 5px;
+        border-bottom: 1px solid #313244;
+      }
+      .diff-row.header {
+        font-weight: bold;
+        background: #313244;
+        color: #cdd6f4;
+      }
+      .diff-row.match {
+        background: rgba(166, 227, 161, 0.05);
+      }
+      .diff-row.mismatch {
+        background: rgba(243, 139, 168, 0.1);
+      }
+      .match-icon {
+        color: #a6e3a1;
+      }
+      .mismatch-icon {
+        color: #f38ba8;
+      }
+      .summary {
+        margin-top: 20px;
+        padding: 20px;
+        background: #313244;
+        border-radius: 8px;
+      }
+      .summary h3 {
+        margin-top: 0;
+        color: #cba6f7;
+      }
+      .summary-stat {
+        display: inline-block;
+        margin-right: 30px;
+      }
+      .summary-stat .label {
+        color: #6c7086;
+      }
+      .summary-stat .value {
+        font-size: 24px;
+        font-weight: bold;
+      }
+      .summary-stat .value.good {
+        color: #a6e3a1;
+      }
+      .summary-stat .value.bad {
+        color: #f38ba8;
+      }
+      pre {
+        margin: 0;
+        white-space: pre-wrap;
+        word-break: break-all;
+      }
+    </style>
+  </head>
+  <body>
+    <h1>🔬 BOSSA Protocol Trace Test</h1>
+    <p class="subtitle">
+      Compare Bossa.js implementation against Samba.cpp source of truth
+    </p>
+
+    <div class="controls">
+      <label>
+        Firmware Size (KB):
+        <input type="number" id="firmwareSize" value="63" min="1" max="256" />
+      </label>
+      <label>
+        Chunk Size:
+        <input type="number" id="chunkSize" value="2048" min="256" max="8192" />
+      </label>
+      <button id="runTest" onclick="runTest()">▶ Run Protocol Test</button>
+      <button
+        onclick="exportResults()"
+        style="margin-left: 10px; background: #313244; color: #cdd6f4"
+      >
+        📋 Export Results
+      </button>
+    </div>
+
+    <div id="status" class="status" style="display: none"></div>
+
+    <div class="output-container">
+      <div class="trace-panel">
+        <div class="trace-header reference">
+          📘 Reference Trace (Samba.cpp)
+          <span id="refCount">0 entries</span>
+        </div>
+        <div class="trace-content" id="referenceTrace"></div>
+      </div>
+      <div class="trace-panel">
+        <div class="trace-header actual">
+          📗 Actual Trace (Bossa.js)
+          <span id="actCount">0 entries</span>
+        </div>
+        <div class="trace-content" id="actualTrace"></div>
+      </div>
+    </div>
+
+    <div class="comparison-panel">
+      <div class="comparison-header">📊 Side-by-Side Comparison</div>
+      <div class="comparison-content" id="comparison"></div>
+    </div>
+
+    <div id="summary" class="summary" style="display: none">
+      <h3>📈 Test Results</h3>
+      <div class="summary-stat">
+        <div class="label">Reference Entries</div>
+        <div class="value" id="refTotal">0</div>
+      </div>
+      <div class="summary-stat">
+        <div class="label">Actual Entries</div>
+        <div class="value" id="actTotal">0</div>
+      </div>
+      <div class="summary-stat">
+        <div class="label">Differences</div>
+        <div class="value" id="diffCount">0</div>
+      </div>
+      <div class="summary-stat">
+        <div class="label">Status</div>
+        <div class="value" id="testStatus">-</div>
+      </div>
+    </div>
+
+    <script type="module">
+      import { Bossa } from "../src/client/services/protocols/Bossa.js";
+      import {
+        MockSerialPort,
+        generateReferenceTrace,
+        compareTraces,
+      } from "./browser-trace-test.js";
+
+      let testResults = null;
+
+      window.runTest = async function () {
+        const firmwareSizeKB =
+          parseInt(document.getElementById("firmwareSize").value) || 63;
+        const chunkSize =
+          parseInt(document.getElementById("chunkSize").value) || 2048;
+        const firmwareSize = firmwareSizeKB * 1024;
+
+        const statusEl = document.getElementById("status");
+        const runBtn = document.getElementById("runTest");
+
+        statusEl.style.display = "block";
+        statusEl.className = "status running";
+        statusEl.textContent = "⏳ Running protocol test...";
+        runBtn.disabled = true;
+
+        try {
+          // Generate reference trace
+          statusEl.textContent = "⏳ Generating reference trace (Samba.cpp)...";
+          const referenceTrace = generateReferenceTrace(firmwareSize, {
+            chunkSize,
+          });
+
+          // Run actual implementation
+          statusEl.textContent = "⏳ Running Bossa.js with MockPort...";
+          const mockPort = new MockSerialPort({
+            name: "Bossa.js Test",
+            verbose: false,
+          });
+
+          const bossa = new Bossa(mockPort);
+          await mockPort.open({ baudRate: 230400 });
+          await bossa.connect();
+
+          // Handshake
+          await bossa.hello({ attempts: 1, proceedOnFailure: true });
+
+          // Erase
+          await bossa.chipErase(0);
+
+          // Write firmware
+          const firmware = new Uint8Array(firmwareSize);
+          for (let i = 0; i < firmware.length; i++) {
+            firmware[i] = i & 0xff;
+          }
+
+          const SRAM_OFFSET = 0x34;
+          let flashAddr = 0;
+
+          for (let i = 0; i < firmware.length; i += chunkSize) {
+            const chunk = firmware.subarray(
+              i,
+              Math.min(i + chunkSize, firmware.length)
+            );
+            await bossa.writeBinary(SRAM_OFFSET, chunk);
+            await bossa.writeBuffer(SRAM_OFFSET, flashAddr, chunk.length);
+            flashAddr += chunk.length;
+
+            // Update progress
+            const pct = Math.round((i / firmware.length) * 100);
+            statusEl.textContent = `⏳ Writing chunks... ${pct}%`;
+          }
+
+          await new Promise((r) => setTimeout(r, 100));
+          await bossa.reset();
+          await bossa.disconnect();
+
+          // Get actual trace
+          const actualTrace = mockPort.trace.map((entry) => ({
+            time: entry.time,
+            direction: entry.direction,
+            ascii: entry.ascii,
+          }));
+
+          // Display traces
+          displayTrace("referenceTrace", referenceTrace, "refCount");
+          displayTrace("actualTrace", actualTrace, "actCount");
+
+          // Compare
+          const comparison = compareTracesUI(referenceTrace, actualTrace);
+
+          // Show summary
+          document.getElementById("summary").style.display = "block";
+          document.getElementById("refTotal").textContent =
+            referenceTrace.length;
+          document.getElementById("actTotal").textContent = actualTrace.length;
+          document.getElementById("diffCount").textContent =
+            comparison.differences;
+          document.getElementById("diffCount").className =
+            "value " + (comparison.differences === 0 ? "good" : "bad");
+
+          const statusText =
+            comparison.differences === 0 ? "✅ PASS" : "❌ FAIL";
+          document.getElementById("testStatus").textContent = statusText;
+          document.getElementById("testStatus").className =
+            "value " + (comparison.differences === 0 ? "good" : "bad");
+
+          statusEl.className =
+            "status " + (comparison.differences === 0 ? "success" : "error");
+          statusEl.textContent =
+            comparison.differences === 0
+              ? "✅ Test PASSED! Implementation matches source of truth."
+              : `❌ Test FAILED! Found ${comparison.differences} differences.`;
+
+          testResults = { referenceTrace, actualTrace, comparison };
+        } catch (e) {
+          statusEl.className = "status error";
+          statusEl.textContent = `❌ Error: ${e.message}`;
+          console.error(e);
+        }
+
+        runBtn.disabled = false;
+      };
+
+      function displayTrace(elementId, trace, countId) {
+        const el = document.getElementById(elementId);
+        document.getElementById(
+          countId
+        ).textContent = `${trace.length} entries`;
+
+        el.innerHTML = trace
+          .map((entry) => {
+            const dirClass = entry.direction.toLowerCase();
+            return (
+              `<div class="trace-entry ${dirClass}">` +
+              `<span class="trace-time">[${String(entry.time).padStart(
+                6
+              )}]</span>` +
+              `<span class="trace-dir ${dirClass}">${entry.direction}</span>` +
+              `<span class="trace-data">${escapeHtml(entry.ascii)}</span>` +
+              `</div>`
+            );
+          })
+          .join("");
+      }
+
+      function compareTracesUI(reference, actual) {
+        const el = document.getElementById("comparison");
+        const maxLen = Math.max(reference.length, actual.length);
+        let differences = 0;
+
+        let html =
+          '<div class="diff-row header"><div>#</div><div>Dir</div><div>Reference</div><div>Actual</div><div>Status</div></div>';
+
+        for (let i = 0; i < maxLen; i++) {
+          const ref = reference[i];
+          const act = actual[i];
+
+          const refStr = ref ? ref.ascii : "(missing)";
+          const actStr = act ? act.ascii : "(missing)";
+          const refDir = ref?.direction || "??";
+          const actDir = act?.direction || "??";
+
+          let match = true;
+          let status = '<span class="match-icon">✓</span>';
+
+          if (!ref || !act) {
+            match = false;
+            status = '<span class="mismatch-icon">✗ MISSING</span>';
+            differences++;
+          } else if (refDir !== actDir) {
+            match = false;
+            status = '<span class="mismatch-icon">✗ DIR</span>';
+            differences++;
+          } else if (ref.ascii !== act.ascii) {
+            if (ref.ascii.includes("[") && act.ascii.includes("[")) {
+              status = '<span style="color: #f9e2af;">≈</span>';
+            } else {
+              match = false;
+              status = '<span class="mismatch-icon">✗ DATA</span>';
+              differences++;
+            }
+          }
+
+          html +=
+            `<div class="diff-row ${match ? "match" : "mismatch"}">` +
+            `<div>${i}</div>` +
+            `<div>${refDir}</div>` +
+            `<div>${escapeHtml(refStr.substring(0, 45))}</div>` +
+            `<div>${escapeHtml(actStr.substring(0, 45))}</div>` +
+            `<div>${status}</div>` +
+            `</div>`;
+        }
+
+        el.innerHTML = html;
+        return { differences };
+      }
+
+      function escapeHtml(str) {
+        return str
+          .replace(/&/g, "&amp;")
+          .replace(/</g, "&lt;")
+          .replace(/>/g, "&gt;");
+      }
+
+      window.exportResults = function () {
+        if (!testResults) {
+          alert("Run a test first!");
+          return;
+        }
+
+        const output = [
+          "═".repeat(80),
+          "BOSSA PROTOCOL TRACE TEST RESULTS",
+          "Generated: " + new Date().toISOString(),
+          "═".repeat(80),
+          "",
+          "--- REFERENCE TRACE (Samba.cpp) ---",
+          ...testResults.referenceTrace.map(
+            (e) => `[${String(e.time).padStart(6)}] ${e.direction}: ${e.ascii}`
+          ),
+          "",
+          "--- ACTUAL TRACE (Bossa.js) ---",
+          ...testResults.actualTrace.map(
+            (e) => `[${String(e.time).padStart(6)}] ${e.direction}: ${e.ascii}`
+          ),
+          "",
+          "--- SUMMARY ---",
+          `Reference entries: ${testResults.referenceTrace.length}`,
+          `Actual entries: ${testResults.actualTrace.length}`,
+          `Differences: ${testResults.comparison.differences}`,
+          `Status: ${
+            testResults.comparison.differences === 0 ? "PASS" : "FAIL"
+          }`,
+          "═".repeat(80),
+        ].join("\n");
+
+        const blob = new Blob([output], { type: "text/plain" });
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement("a");
+        a.href = url;
+        a.download = `bossa-trace-${Date.now()}.txt`;
+        a.click();
+        URL.revokeObjectURL(url);
+      };
+    </script>
+  </body>
+</html>

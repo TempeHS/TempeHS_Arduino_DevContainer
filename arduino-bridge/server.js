@@ -5,6 +5,11 @@ import path from "path";
 import { spawn, exec } from "child_process";
 import { fileURLToPath } from "url";
 
+// Version for cache debugging - update this when making changes
+const SERVER_VERSION = "1.0.6-wireshark-addr-fix";
+console.log(`[Arduino Bridge Server] Version: ${SERVER_VERSION}`);
+console.log(`[Arduino Bridge Server] Started at: ${new Date().toISOString()}`);
+
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
@@ -48,6 +53,15 @@ app.use((req, res, next) => {
   next();
 });
 app.use("/artifacts", express.static(BUILD_ROOT));
+
+// Version endpoint for client verification
+app.get("/api/version", (req, res) => {
+  res.json({
+    version: SERVER_VERSION,
+    timestamp: new Date().toISOString(),
+    component: "server",
+  });
+});
 
 // --- Helper Functions ---
 
