@@ -24,13 +24,17 @@ fetch("/api/version")
         `%c⚠️ VERSION MISMATCH! Client: ${CLIENT_VERSION}, Server: ${data.version}`,
         "color: #ff0000; font-weight: bold;"
       );
+      setBridgeStatus({
+        online: false,
+        message: "Version mismatch detected",
+        detail: `Client ${CLIENT_VERSION}, Server ${data.version}. Restart to resync`,
+      });
     } else {
       console.log(`%c✅ Client and Server versions match`, "color: #00ff00;");
+      setBridgeStatus({ online: true });
     }
   })
-  .catch((err) =>
-    console.warn("[Version Check] Could not fetch server version:", err.message)
-  );
+  .catch((err) => handleBridgeError("Version check", err));
 
 const serialManager = new SerialManager();
 const uploadManager = new UploadManager();
@@ -41,6 +45,10 @@ const plotter = new PlotterUI("plotter-container");
 let lastWorkingBaudRate = 9600;
 
 // UI Elements
+const bridgeStatusBanner = document.getElementById("bridge-status");
+const bridgeStatusText = document.getElementById("bridgeStatusText");
+const bridgeStatusDetail = document.getElementById("bridgeStatusDetail");
+const restartBridgeBtn = document.getElementById("restartBridgeBtn");
 const connectBtn = document.getElementById("connectBtn");
 const disconnectBtn = document.getElementById("disconnectBtn");
 const baudSelect = document.getElementById("baudRate");
@@ -72,6 +80,71 @@ const modalSelectPortBtn = document.getElementById("modalSelectPortBtn");
 const modalCancelBtn = document.getElementById("modalCancelBtn");
 
 let isPlotterMode = false;
+
+function setBridgeStatus({ online, message = "", detail = "", busy = false }) {
+  if (!bridgeStatusBanner) return;
+
+  if (online) {
+    bridgeStatusBanner.classList.add("hidden");
+    bridgeStatusBanner.classList.remove("busy");
+    bridgeStatusText.textContent = message || "Bridge online";
+    bridgeStatusDetail.textContent = "";
+    if (restartBridgeBtn) restartBridgeBtn.disabled = false;
+    return;
+  }
+
+  bridgeStatusBanner.classList.remove("hidden");
+  if (busy) {
+    bridgeStatusBanner.classList.add("busy");
+  } else {
+    bridgeStatusBanner.classList.remove("busy");
+  }
+  bridgeStatusText.textContent = message || "Bridge server unavailable";
+  bridgeStatusDetail.textContent = detail;
+  if (restartBridgeBtn) restartBridgeBtn.disabled = busy;
+}
+
+function handleBridgeError(context, error) {
+  const message = error?.message || String(error || "unknown error");
+  console.error(`[Bridge Error] ${context}:`, message);
+  setBridgeStatus({
+    online: false,
+    message: "Bridge server unreachable",
+    detail: `${context}: ${message}`,
+  });
+}
+
+async function requestBridgeRestart() {
+  if (!restartBridgeBtn) return;
+  setBridgeStatus({
+    online: false,
+    busy: true,
+    message: "Restarting Arduino Bridge...",
+    detail: "Killing existing processes and relaunching (≈5s)",
+  });
+
+  try {
+    const response = await fetch("/api/restart", { method: "POST" });
+    if (!response.ok) {
+      const payload = await response.json().catch(() => ({}));
+      throw new Error(payload.error || `HTTP ${response.status}`);
+    }
+    setBridgeStatus({
+      online: false,
+      busy: true,
+      message: "Bridge restarting...",
+      detail: "Reloading shortly to reconnect",
+    });
+    setTimeout(() => window.location.reload(), 4000);
+  } catch (error) {
+    handleBridgeError("Bridge restart", error);
+    if (restartBridgeBtn) restartBridgeBtn.disabled = false;
+  }
+}
+
+if (restartBridgeBtn) {
+  restartBridgeBtn.addEventListener("click", requestBridgeRestart);
+}
 
 // DTR/RTS Handlers
 dtrCheck.addEventListener("change", async (e) => {
@@ -181,8 +254,11 @@ async function loadBoards() {
       if (board.fqbn === "arduino:avr:uno") option.selected = true;
       boardSelect.appendChild(option);
     });
+
+    setBridgeStatus({ online: true });
   } catch (error) {
     console.error("Error loading boards:", error);
+    handleBridgeError("Load boards", error);
     boardSelect.innerHTML =
       '<option value="arduino:avr:uno">Arduino Uno (Fallback)</option>';
   }
@@ -227,6 +303,7 @@ async function loadSketches() {
     }
   } catch (error) {
     console.error("Error loading sketches:", error);
+    handleBridgeError("Load sketches", error);
   }
 }
 

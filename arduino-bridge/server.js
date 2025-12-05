@@ -19,6 +19,17 @@ const server = http.createServer(app);
 const PORT = 3001; // API Server Port
 const WORKSPACE_ROOT = path.resolve(__dirname, "..");
 const BUILD_ROOT = path.join(WORKSPACE_ROOT, "build", "sketches");
+const START_SCRIPT = path.join(
+  WORKSPACE_ROOT,
+  ".devcontainer",
+  "start-bridge.sh"
+);
+const STRATEGIES_ROOT = path.join(
+  WORKSPACE_ROOT,
+  "Arduino_Upload_to_WebSerialAPI_Tool",
+  "src",
+  "strategies"
+);
 const MAX_SCAN_DEPTH = 3;
 const ROOT_IGNORE_DIRS = new Set([
   "arduino-bridge",
@@ -42,6 +53,8 @@ const INTERNAL_IGNORE_DIRS = new Set([
 ]);
 
 fs.mkdirSync(BUILD_ROOT, { recursive: true });
+
+let restartInProgress = false;
 
 app.use(express.json());
 app.use((req, res, next) => {
@@ -109,6 +122,65 @@ function listSketchDirectories() {
     }
   }
   return sketches.sort((a, b) => a.name.localeCompare(b.name));
+}
+
+function listStrategies() {
+  try {
+    const entries = fs.readdirSync(STRATEGIES_ROOT, { withFileTypes: true });
+    return entries
+      .filter((entry) => entry.isFile() && entry.name.endsWith(".js"))
+      .map((entry) => ({
+        name: entry.name.replace(/\.js$/, ""),
+        file: entry.name,
+      }))
+      .sort((a, b) => a.name.localeCompare(b.name));
+  } catch (err) {
+    console.error("Failed to list strategies", err);
+    return [];
+  }
+}
+
+function runRestartSequence() {
+  if (restartInProgress) {
+    return Promise.resolve({ inProgress: true });
+  }
+
+  restartInProgress = true;
+
+  const restartCmd = [
+    'pkill -9 -f "node.*arduino-bridge" 2>/dev/null || true',
+    "lsof -ti:3000,3001,3002,3003 | xargs -r kill -9 2>/dev/null || true",
+    "sleep 1",
+    `bash "${START_SCRIPT}"`,
+  ].join(" && ");
+
+  return new Promise((resolve) => {
+    const child = spawn("bash", ["-c", restartCmd], {
+      cwd: WORKSPACE_ROOT,
+      env: process.env,
+    });
+
+    let stdout = "";
+    let stderr = "";
+
+    child.stdout.on("data", (data) => {
+      stdout += data.toString();
+    });
+
+    child.stderr.on("data", (data) => {
+      stderr += data.toString();
+    });
+
+    child.on("close", (code) => {
+      restartInProgress = false;
+      resolve({ code, stdout, stderr });
+    });
+
+    child.on("error", (error) => {
+      restartInProgress = false;
+      resolve({ code: -1, stdout, stderr: error?.message || "" });
+    });
+  });
 }
 
 function validateSketchPath(relativePath) {
@@ -281,6 +353,11 @@ app.get("/api/boards", (req, res) => {
   });
 });
 
+app.get("/api/strategies", (req, res) => {
+  const strategies = listStrategies();
+  res.json({ strategies });
+});
+
 app.post("/api/compile", async (req, res) => {
   console.log("[API] Received compile request:", req.body);
   const { path: relativePath, fqbn } = req.body || {};
@@ -407,6 +484,34 @@ app.get("/api/ports", (req, res) => {
       res.status(500).json({ error: "Failed to parse port list" });
     }
   });
+});
+
+app.post("/api/restart", async (req, res) => {
+  if (restartInProgress) {
+    return res.status(409).json({ error: "Restart already in progress" });
+  }
+
+  if (!fs.existsSync(START_SCRIPT)) {
+    return res
+      .status(500)
+      .json({ success: false, error: "start-bridge.sh not found" });
+  }
+
+  const result = await runRestartSequence();
+
+  if (result.inProgress) {
+    return res.status(409).json({ error: "Restart already in progress" });
+  }
+
+  const log = [result.stdout, result.stderr].filter(Boolean).join("\n");
+
+  if (result.code !== 0) {
+    return res
+      .status(500)
+      .json({ success: false, error: "Bridge restart failed", log });
+  }
+
+  res.json({ success: true, log });
 });
 
 server.listen(PORT, "0.0.0.0", () => {

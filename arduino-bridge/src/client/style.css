@@ -132,3 +132,58 @@ select {
   height: 20px;
   margin: 0 10px;
 }
+
+.status-banner {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+  padding: 10px 16px;
+  background-color: #512120;
+  border-bottom: 1px solid #70302e;
+  color: #f8dada;
+  font-size: 14px;
+}
+
+.status-banner.busy {
+  background-color: #3c3f41;
+  border-color: #505354;
+  color: #d4d4d4;
+}
+
+.status-banner.hidden {
+  display: none;
+}
+
+.status-text {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.status-text span {
+  font-size: 12px;
+  color: #f0c7c6;
+}
+
+.status-banner.busy .status-text span {
+  color: #cccccc;
+}
+
+.secondary-btn {
+  background-color: transparent;
+  border: 1px solid #f8dada;
+  color: #f8dada;
+  padding: 6px 12px;
+  border-radius: 4px;
+}
+
+.status-banner.busy .secondary-btn {
+  border-color: #d4d4d4;
+  color: #d4d4d4;
+}
+
+.secondary-btn:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
