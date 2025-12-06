@@ -196,6 +196,16 @@ export class Bossa {
   async writeBinary(address, data) {
     const addrHex = address.toString(16).padStart(8, "0");
     const sizeHex = data.length.toString(16).padStart(8, "0");
+
+    // Log the S# command with first 8 bytes of data for debugging
+    const firstBytes = Array.from(data.slice(0, Math.min(8, data.length)))
+      .map((b) => b.toString(16).padStart(2, "0"))
+      .join(" ");
+    console.log(
+      `[Bossa] → S${addrHex},${sizeHex}# (${data.length} bytes to data_buffer[0x${addrHex}])`
+    );
+    console.log(`[Bossa]   First bytes: ${firstBytes}...`);
+
     await this.writeCommand(`S${addrHex},${sizeHex}#`);
     await this.delay(5);
 
@@ -242,10 +252,13 @@ export class Bossa {
 
   async reset() {
     console.log(`[Bossa] ═══ RESET ═══`);
+    // Flush any pending data in serial buffer before sending reset
+    await this.flush(100);
     console.log(`[Bossa] → K#`);
     await this.writeCommand("K#");
+    // Board resets almost immediately, so we may not get ACK
     const ok = await this.readAck("K", 1000);
-    console.log(`[Bossa] ← K ${ok ? "OK" : "(board reset)"}`);
+    console.log(`[Bossa] ← K ${ok ? "OK" : "(board reset - expected)"}`);
   }
 
   async go(address) {
@@ -347,6 +360,7 @@ export class Bossa {
   async verifyCRC(address, size, expectedData) {
     const addrHex = address.toString(16).padStart(8, "0");
     const sizeHex = size.toString(16).padStart(8, "0");
+    console.log(`[Bossa] → Z${addrHex},${sizeHex}# (CRC verify)`);
     await this.delay(100);
     await this.flush(50);
     await this.writeCommand(`Z${addrHex},${sizeHex}#`);
@@ -356,12 +370,28 @@ export class Bossa {
         maxBytes: 16,
       });
       const responseStr = String.fromCharCode(...response);
+      console.log(
+        `[Bossa] ← Z response: "${responseStr
+          .replace(/\r/g, "<CR>")
+          .replace(/\n/g, "<LF>")}"`
+      );
       const match = responseStr.match(/Z([0-9A-Fa-f]{8})#/);
-      if (!match) return false;
+      if (!match) {
+        console.log(`[Bossa] ❌ No CRC match in response`);
+        return false;
+      }
       const flashCRC = parseInt(match[1], 16);
       const expectedCRC = Bossa.calculateCRC16(expectedData.slice(0, size));
+      console.log(
+        `[Bossa] Flash CRC: 0x${flashCRC
+          .toString(16)
+          .padStart(4, "0")}, Expected: 0x${expectedCRC
+          .toString(16)
+          .padStart(4, "0")}`
+      );
       return flashCRC === expectedCRC;
     } catch (e) {
+      console.log(`[Bossa] ❌ CRC verification exception: ${e.message}`);
       return false;
     }
   }

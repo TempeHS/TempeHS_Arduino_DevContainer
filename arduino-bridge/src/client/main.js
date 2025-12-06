@@ -4,7 +4,7 @@ import { UploadManager } from "./services/UploadManager.js";
 import { PlotterUI } from "./ui/PlotterUI.js";
 
 // Version for cache debugging - update this when making changes
-const CLIENT_VERSION = "1.0.6-wireshark-addr-fix";
+const CLIENT_VERSION = "1.0.8-longer-delays";
 console.log(
   `%c[Arduino Bridge Client] Version: ${CLIENT_VERSION}`,
   "color: #00ff00; font-weight: bold;"
@@ -307,9 +307,59 @@ async function loadSketches() {
   }
 }
 
-// Initialize
-loadBoards();
-loadSketches();
+// Load saved board configuration from VS Code arduino.json
+async function loadBoardConfig() {
+  try {
+    const response = await fetch("/api/board-config");
+    if (!response.ok) return null;
+    const data = await response.json();
+    return data.config;
+  } catch (error) {
+    console.warn("[Board Config] Could not load saved config:", error);
+    return null;
+  }
+}
+
+// Initialize - load boards and sketches, then apply saved config
+async function initialize() {
+  // Load boards and sketches first
+  await Promise.all([loadBoards(), loadSketches()]);
+
+  // Now try to apply saved configuration
+  const savedConfig = await loadBoardConfig();
+  if (savedConfig) {
+    console.log("[Board Config] Loaded saved config:", savedConfig);
+
+    // Apply saved board selection
+    if (savedConfig.board) {
+      const boardOption = Array.from(boardSelect.options).find(
+        (opt) => opt.value === savedConfig.board
+      );
+      if (boardOption) {
+        boardSelect.value = savedConfig.board;
+        console.log(`[Board Config] Restored board: ${savedConfig.board}`);
+      }
+    }
+
+    // Apply saved sketch selection
+    if (savedConfig.sketch) {
+      // Extract directory name from sketch path (e.g., "demo_blink/demo_blink.ino" -> "demo_blink")
+      const sketchDir = savedConfig.sketch.split("/")[0];
+      const sketchOption = Array.from(sketchSelect.options).find(
+        (opt) => opt.value === sketchDir
+      );
+      if (sketchOption) {
+        sketchSelect.value = sketchDir;
+        console.log(`[Board Config] Restored sketch: ${sketchDir}`);
+      }
+    }
+  }
+
+  // Update UI state
+  updateCompileButtons();
+}
+
+initialize();
 
 // Check if selected board uses UF2 download mode (no serial upload)
 function getBoardUploadMode() {
@@ -382,15 +432,65 @@ sketchSelect.addEventListener("change", async (e) => {
     return;
   }
   updateCompileButtons();
+
+  // Update VS Code Arduino extension configuration with sketch
+  const sketchDir = sketchSelect.value;
+  const fqbn = boardSelect.value;
+  if (sketchDir && fqbn) {
+    try {
+      const payload = {
+        fqbn,
+        sketch: `${sketchDir}/${sketchDir.split("/").pop()}.ino`,
+      };
+      const response = await fetch("/api/board-config", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload),
+      });
+      if (response.ok) {
+        console.log(
+          `[Board Config] Updated VS Code config: board=${fqbn}, sketch=${payload.sketch}`
+        );
+      }
+    } catch (error) {
+      console.warn("[Board Config] Error updating VS Code config:", error);
+    }
+  }
 });
 
-boardSelect.addEventListener("change", () => {
+boardSelect.addEventListener("change", async () => {
   updateCompileButtons();
 
   // Auto-select default baud rate for this board (only if not connected)
   if (!serialManager.provider.port) {
     const defaultBaud = getDefaultBaudRate(boardSelect.value);
     baudSelect.value = defaultBaud.toString();
+  }
+
+  // Update VS Code Arduino extension board configuration
+  const fqbn = boardSelect.value;
+  if (fqbn) {
+    try {
+      const payload = { fqbn };
+      // Include sketch if one is selected
+      if (sketchSelect.value && sketchSelect.value !== "__REFRESH__") {
+        // Find the .ino file path
+        const sketchDir = sketchSelect.value;
+        payload.sketch = `${sketchDir}/${sketchDir.split("/").pop()}.ino`;
+      }
+      const response = await fetch("/api/board-config", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload),
+      });
+      if (response.ok) {
+        console.log(`[Board Config] Updated VS Code config to: ${fqbn}`);
+      } else {
+        console.warn("[Board Config] Failed to update VS Code config");
+      }
+    } catch (error) {
+      console.warn("[Board Config] Error updating VS Code config:", error);
+    }
   }
 
   // Show info message for UF2/download boards

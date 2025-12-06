@@ -1,10 +1,23 @@
+/**
+ * BOSSAStrategy v1.0.9-padded-firmware
+ * - Added 250ms delay between chunks with logging
+ * - 10 second post-write wait
+ */
 import { Bossa } from "../protocols/Bossa.js";
+import {
+  BOSSA_RENESAS_CONFIG,
+  getProtocolConfig,
+  getChunkSize,
+} from "../../config/boardProtocols.js";
 
 /**
- * R4 WiFi Upload Strategy using BOSSA/SAM-BA Protocol
+ * BOSSA Upload Strategy using SAM-BA Protocol
  *
- * This strategy handles firmware uploads to Arduino UNO R4 WiFi boards via Web Serial API.
- * The R4 WiFi uses an ESP32-S3 as a USB bridge to the Renesas RA4M1 microcontroller.
+ * This strategy handles firmware uploads to boards using the BOSSA/SAM-BA protocol via Web Serial API.
+ * Supports: Arduino R4 WiFi, R4 Minima, Nano R4, and other Renesas/SAMD boards.
+ *
+ * CONFIGURATION: All protocol parameters are loaded from boardProtocols.js
+ * which is the SINGLE SOURCE OF TRUTH matching the YAML protocol files.
  *
  * BOOTLOADER ENTRY: Works reliably via 1200 baud touch
  * =======================================================
@@ -16,26 +29,38 @@ import { Bossa } from "../protocols/Bossa.js";
  *
  * PROTOCOL: SAM-BA Extended (BOSSA)
  * ==================================
- * - Baud rate: 230400 (confirmed via Wireshark capture)
+ * - Baud rate: From config (230400 for Renesas)
  * - Commands: N#, V#, S#, Y#, G# (see Bossa.js for details)
- * - Flash offset: 0x4000 (bootloader adds SKETCH_FLASH_OFFSET internally)
+ * - Flash offset: From config (0x4000 for Renesas)
+ * - Chunk size: From config (4096 bytes - MUST match Wireshark capture!)
  *
  * SOURCE OF TRUTH:
+ * @see config/boardProtocols.js - Protocol configuration
+ * @see protocols/bossa-renesas.yaml - YAML definition
  * @see https://github.com/arduino/arduino-renesas-bootloader/blob/main/src/bossa.c
  */
-export class R4WifiStrategy {
+export class BOSSAStrategy {
   constructor() {
-    this.name = "R4 WiFi (BOSSA/SAM-BA)";
+    this.name = "BOSSA/SAM-BA";
 
-    // R4 WiFi bootloader confirmed at 230400 from Wireshark capture
-    this.PRIMARY_BAUD = 230400;
+    // Load configuration from centralized config (matches YAML protocol files)
+    this.config = BOSSA_RENESAS_CONFIG;
+
+    // Serial configuration from config
+    this.PRIMARY_BAUD = this.config.serial.baudUpload; // 230400
+    this.TOUCH_BAUD = this.config.serial.baudTouch; // 1200
 
     // Fallback baud rates if primary doesn't work
     this.ALL_BAUD_RATES = [
-      230400, 115200, 921600, 460800, 57600, 38400, 19200, 9600,
+      this.PRIMARY_BAUD,
+      115200,
+      921600,
+      460800,
+      57600,
+      38400,
+      19200,
+      9600,
     ];
-
-    this.TOUCH_BAUD = 1200; // For bootloader entry
   }
 
   /**
@@ -699,10 +724,99 @@ export class R4WifiStrategy {
       console.log(`[BOSSA] Execution (go) offset: 0x${goOffset.toString(16)}`);
       console.log(`[BOSSA] data_buffer offset: 0x${sramBufferA.toString(16)}`);
 
-      const firmware = new Uint8Array(data);
-      const totalBytes = firmware.length;
+      // Get chunk size from config (used for both padding and writing)
+      const protocolConfig = getProtocolConfig(fqbn) || this.config;
+      const chunkSize =
+        protocolConfig.memory?.chunkSize || this.config.memory.chunkSize;
 
-      // Step 1: Erase flash (required for R4)
+      // Pad firmware to chunk size boundary to ensure complete flash pages
+      // The bootloader may have issues with partial page writes
+      const originalSize = data.byteLength;
+      const paddedSize = Math.ceil(originalSize / chunkSize) * chunkSize;
+      const firmware = new Uint8Array(paddedSize);
+      firmware.set(new Uint8Array(data), 0);
+      // Fill padding with 0xFF (erased flash state)
+      firmware.fill(0xff, originalSize);
+      const totalBytes = firmware.length;
+      console.log(
+        `[BOSSA] Firmware padded from ${originalSize} to ${totalBytes} bytes (${chunkSize}-byte boundary)`
+      );
+
+      // Step 1: Upload flash applet (matches Arduino IDE protocol from Wireshark)
+      // The IDE uploads a 52-byte applet to data_buffer[0] before writing firmware
+      // This applet is ARM Thumb code used for flash operations
+      if (fqbn && fqbn.includes("renesas_uno")) {
+        console.log(`[BOSSA] Uploading flash applet (52 bytes)...`);
+        if (progressCallback) progressCallback(10, "Uploading flash applet...");
+
+        // Flash applet extracted from Arduino IDE Wireshark capture (R4.pcapng)
+        // S00000000,00000034# followed by 52 bytes of ARM Thumb code
+        const FLASH_APPLET = new Uint8Array([
+          0x09,
+          0x48,
+          0x0a,
+          0x49,
+          0x0a,
+          0x4a,
+          0x02,
+          0xe0,
+          0x08,
+          0xc9,
+          0x08,
+          0xc0,
+          0x01,
+          0x3a,
+          0x00,
+          0x2a,
+          0xfa,
+          0xd1,
+          0x04,
+          0x48,
+          0x00,
+          0x28,
+          0x01,
+          0xd1,
+          0x01,
+          0x48,
+          0x85,
+          0x46,
+          0x70,
+          0x47,
+          0xc0,
+          0x46,
+          0x00,
+          0x00,
+          0x00,
+          0x00,
+          0x00,
+          0x00,
+          0x00,
+          0x00,
+          0x00,
+          0x00,
+          0x00,
+          0x00,
+          0x00,
+          0x00,
+          0x00,
+          0x00,
+          0x00,
+          0x00,
+          0x00,
+          0x00, // 52 bytes (0x34) total
+        ]);
+        await bossa.writeBinary(0x00, FLASH_APPLET);
+        console.log(`[BOSSA] Flash applet uploaded`);
+
+        // W# register commands from Arduino IDE (flash configuration)
+        // W00000030,00000400# and W00000020,00000000#
+        console.log(`[BOSSA] Configuring flash registers...`);
+        await bossa.writeWord(0x30, 0x400);
+        await bossa.writeWord(0x20, 0x00);
+        console.log(`[BOSSA] Flash registers configured`);
+      }
+
+      // Step 2: Erase flash (required for R4)
       console.log(`[BOSSA] Erasing flash...`);
       if (progressCallback) progressCallback(12, "Erasing flash...");
 
@@ -716,27 +830,26 @@ export class R4WifiStrategy {
       // Use the chipErase method which properly waits for X command ACK
       // X command also has internal 0x4000 offset added by bootloader
       await bossa.chipErase(flashWriteOffset);
-
-      // Skip W commands for now - they may only be needed for applet-based approach
-      // The direct SAM-BA Y command should work without flash register config
-      // If this doesn't work, we may need to implement the applet approach
       console.log(`[BOSSA] Flash erased, starting write...`);
 
       // Step 2: Write flash in chunks
       //
-      // SAM-BA R4 WiFi protocol (from bootloader source):
+      // SAM-BA R4 WiFi protocol (from bootloader source + Wireshark capture):
       // 1. S[buffer_offset],[size]# - Write data to bootloader's data_buffer[]
       // 2. Y[buffer_offset],0# - Set copyOffset (where to copy FROM in data_buffer)
       // 3. Y[flash_offset],[size]# - Write from data_buffer to flash
       //    (bootloader adds SKETCH_FLASH_OFFSET internally: physical_addr = 0x4000 + flash_offset)
       //
-      // Using 2048-byte (0x800) chunks to match PROGRAM_BLOCK_SIZE
-      // This ensures each Y write aligns with bootloader's erase granularity
-      // (bootloader erases 2 blocks = 4KB when address % 0x800 == 0)
-      const chunkSize = 2048;
+      // Chunk size already determined above from config (MUST match Wireshark capture!)
+      // Renesas: 4096 bytes (0x1000) - verified in R4.pcapng
       const numChunks = Math.ceil(totalBytes / chunkSize);
       console.log(
         `[BOSSA] Writing ${totalBytes} bytes in ${numChunks} chunks (${chunkSize} bytes each)...`
+      );
+      console.log(
+        `[BOSSA] Chunk size from config: ${chunkSize} (protocol: ${
+          protocolConfig.variant || "default"
+        })`
       );
       if (progressCallback) progressCallback(15, "Writing flash...");
 
@@ -748,12 +861,13 @@ export class R4WifiStrategy {
       for (let i = 0; i < totalBytes; i += chunkSize) {
         const chunkNum = Math.floor(i / chunkSize) + 1;
         const chunk = firmware.subarray(i, Math.min(i + chunkSize, totalBytes));
+        const isLastChunk = i + chunkSize >= totalBytes;
 
         // Log: CHUNK #/total @ flash_addr (size bytes)
         console.log(
           `[BOSSA] CHUNK ${chunkNum}/${numChunks} @ 0x${flashAddr.toString(
             16
-          )} (${chunk.length}B)`
+          )} (${chunk.length}B)${isLastChunk ? " [LAST]" : ""}`
         );
 
         // Write to SRAM buffer, then commit to flash
@@ -766,22 +880,42 @@ export class R4WifiStrategy {
         if (progressCallback)
           progressCallback(percent, `Chunk ${chunkNum}/${numChunks}`);
 
-        // Small delay between chunks
-        await new Promise((resolve) => setTimeout(resolve, 20));
+        // Delay between chunks - CRITICAL: IDE takes ~250ms per chunk!
+        // Wireshark shows 238-261ms between 4KB chunks
+        // This allows flash controller to fully commit each page
+        if (isLastChunk) {
+          console.log(
+            `[BOSSA] Last chunk written, waiting 1000ms for flash commit...`
+          );
+          await new Promise((resolve) => setTimeout(resolve, 1000));
+        } else {
+          console.log(`[BOSSA] Waiting 250ms for flash page commit...`);
+          await new Promise((resolve) => setTimeout(resolve, 250));
+        }
       }
 
       // Wait for flash operations to fully complete before reset
-      // For larger sketches, flash LP might need extra time to finish all writes
-      console.log("[BOSSA] Waiting for flash operations to complete...");
-      await new Promise((resolve) => setTimeout(resolve, 500));
-
-      // NOTE: CRC verification via Z command times out on R4 WiFi bootloader
-      // The bootloader seems to not respond to Z commands after Y writes
-      // For now, we skip verification and trust the Y ACKs
-      // TODO: Investigate why Z command doesn't respond
+      // The Flash LP peripheral needs time to finish writing all pages
+      // CRITICAL: Larger sketches need more time for flash controller to commit all writes
+      // The Y# ACK only means data was received, not necessarily committed to flash
+      // Using a generous 10 second wait to ensure flash is fully committed
+      const waitTime = 10000;
       console.log(
-        "[BOSSA] Skipping CRC verification (Z command not responding)"
+        `[BOSSA] Waiting ${waitTime}ms for flash operations to complete (${numChunks} chunks, ${totalBytes} bytes)...`
       );
+      await new Promise((resolve) => setTimeout(resolve, waitTime));
+
+      // Verify bootloader is still responsive by sending N# before reset
+      console.log("[BOSSA] Verifying bootloader is responsive...");
+      try {
+        await bossa.hello();
+        console.log("[BOSSA] ✅ Bootloader still responsive");
+      } catch (e) {
+        console.log(
+          "[BOSSA] ⚠️ Bootloader unresponsive after write, proceeding with reset..."
+        );
+      }
+
       if (progressCallback) progressCallback(96, "Finalizing...");
 
       console.log("[BOSSA] Resetting device to run new firmware...");

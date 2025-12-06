@@ -126,6 +126,7 @@
 
     <script type="module">
       import { Bossa } from "../src/client/services/protocols/Bossa.js";
+      import { BOSSA_RENESAS } from "../src/client/config/boardProtocols.js";
 
       let startTime = 0;
 
@@ -351,7 +352,7 @@
         document.getElementById("btnRun").disabled = true;
 
         const firmwareSize = sizeKB * 1024;
-        const chunkSize = 2048;
+        const chunkSize = BOSSA_RENESAS.memory.chunkSize || 4096;
         const numChunks = Math.ceil(firmwareSize / chunkSize);
 
         startTime = Date.now();

@@ -229,7 +229,7 @@
       </label>
       <label>
         Chunk Size:
-        <input type="number" id="chunkSize" value="2048" min="256" max="8192" />
+        <input type="number" id="chunkSize" value="4096" min="256" max="8192" />
       </label>
       <button id="runTest" onclick="runTest()">▶ Run Protocol Test</button>
       <button
@@ -291,6 +291,7 @@
         generateReferenceTrace,
         compareTraces,
       } from "./browser-trace-test.js";
+      import { BOSSA_RENESAS } from "../src/client/config/boardProtocols.js";
 
       let testResults = null;
 
@@ -298,7 +299,9 @@
         const firmwareSizeKB =
           parseInt(document.getElementById("firmwareSize").value) || 63;
         const chunkSize =
-          parseInt(document.getElementById("chunkSize").value) || 2048;
+          parseInt(document.getElementById("chunkSize").value) ||
+          BOSSA_RENESAS.memory.chunkSize ||
+          4096;
         const firmwareSize = firmwareSizeKB * 1024;
 
         const statusEl = document.getElementById("status");

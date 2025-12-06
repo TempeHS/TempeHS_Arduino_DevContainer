@@ -6,7 +6,7 @@ import { spawn, exec } from "child_process";
 import { fileURLToPath } from "url";
 
 // Version for cache debugging - update this when making changes
-const SERVER_VERSION = "1.0.6-wireshark-addr-fix";
+const SERVER_VERSION = "1.0.8-longer-delays";
 console.log(`[Arduino Bridge Server] Version: ${SERVER_VERSION}`);
 console.log(`[Arduino Bridge Server] Started at: ${new Date().toISOString()}`);
 
@@ -353,6 +353,108 @@ app.get("/api/boards", (req, res) => {
   });
 });
 
+// Get detailed board info including upload protocol
+app.get("/api/board-details/:fqbn(*)", (req, res) => {
+  const fqbn = req.params.fqbn;
+  if (!fqbn) {
+    return res.status(400).json({ error: "Missing FQBN parameter" });
+  }
+
+  exec(
+    `arduino-cli board details --fqbn "${fqbn}" --format json`,
+    (error, stdout, stderr) => {
+      if (error) {
+        console.error(`[Board Details] Error for ${fqbn}:`, error.message);
+        return res
+          .status(500)
+          .json({ error: `Failed to get board details: ${error.message}` });
+      }
+      try {
+        const data = JSON.parse(stdout);
+
+        // Extract upload protocol from build_properties
+        let uploadTool = null;
+        let uploadProtocol = null;
+        let use1200bpsTouch = false;
+
+        if (data.build_properties) {
+          for (const prop of data.build_properties) {
+            if (prop.startsWith("upload.tool.default=")) {
+              uploadTool = prop.split("=")[1];
+            } else if (prop.startsWith("upload.tool=") && !uploadTool) {
+              uploadTool = prop.split("=")[1];
+            } else if (prop.startsWith("upload.protocol=")) {
+              uploadProtocol = prop.split("=")[1];
+            } else if (prop === "upload.use_1200bps_touch=true") {
+              use1200bpsTouch = true;
+            }
+          }
+        }
+
+        // Also check tools_dependencies for protocol hints
+        const toolNames = (data.tools_dependencies || []).map((t) => t.name);
+
+        // Determine protocol type from upload tool
+        let protocolType = "unknown";
+        if (uploadTool) {
+          const toolLower = uploadTool.toLowerCase();
+          if (toolLower.includes("bossac") || toolLower.includes("bossa")) {
+            protocolType = "bossa";
+          } else if (toolLower.includes("avrdude")) {
+            protocolType = "stk500";
+          } else if (
+            toolLower.includes("esptool") ||
+            toolLower.includes("esp")
+          ) {
+            protocolType = "esptool";
+          } else if (
+            toolLower.includes("picotool") ||
+            toolLower.includes("rp2040")
+          ) {
+            protocolType = "rp2040";
+          } else if (toolLower.includes("teensy")) {
+            protocolType = "teensy";
+          } else if (toolLower.includes("dfu")) {
+            protocolType = "dfu";
+          } else if (toolLower.includes("openocd")) {
+            protocolType = "openocd";
+          }
+        }
+
+        // Fallback: check tools_dependencies
+        if (protocolType === "unknown" && toolNames.length > 0) {
+          if (toolNames.some((t) => t.includes("bossac"))) {
+            protocolType = "bossa";
+          } else if (toolNames.some((t) => t.includes("avrdude"))) {
+            protocolType = "stk500";
+          } else if (toolNames.some((t) => t.includes("esptool"))) {
+            protocolType = "esptool";
+          }
+        }
+
+        res.json({
+          fqbn: data.fqbn,
+          name: data.name,
+          version: data.version,
+          uploadTool,
+          uploadProtocol,
+          protocolType,
+          use1200bpsTouch,
+          toolsDependencies: toolNames,
+          // Include raw data for debugging
+          _raw: {
+            buildPropertiesCount: data.build_properties?.length || 0,
+            programmersCount: data.programmers?.length || 0,
+          },
+        });
+      } catch (e) {
+        console.error(`[Board Details] Parse error for ${fqbn}:`, e.message);
+        res.status(500).json({ error: "Failed to parse board details" });
+      }
+    }
+  );
+});
+
 app.get("/api/strategies", (req, res) => {
   const strategies = listStrategies();
   res.json({ strategies });
@@ -484,6 +586,80 @@ app.get("/api/ports", (req, res) => {
       res.status(500).json({ error: "Failed to parse port list" });
     }
   });
+});
+
+// --- Update VS Code Arduino Extension Board Configuration ---
+app.post("/api/board-config", async (req, res) => {
+  const { fqbn, sketch } = req.body || {};
+
+  if (!fqbn) {
+    return res.status(400).json({ error: "Missing fqbn" });
+  }
+
+  const arduinoJsonPath = path.join(WORKSPACE_ROOT, ".vscode", "arduino.json");
+
+  try {
+    // Read existing config or create default
+    let config = {};
+    if (fs.existsSync(arduinoJsonPath)) {
+      const content = fs.readFileSync(arduinoJsonPath, "utf8");
+      config = JSON.parse(content);
+    }
+
+    // Update board (always) and sketch (if provided)
+    config.board = fqbn;
+    if (sketch) {
+      config.sketch = sketch;
+    }
+
+    // Ensure .vscode directory exists
+    const vscodeDir = path.dirname(arduinoJsonPath);
+    if (!fs.existsSync(vscodeDir)) {
+      fs.mkdirSync(vscodeDir, { recursive: true });
+    }
+
+    // Write updated config
+    fs.writeFileSync(arduinoJsonPath, JSON.stringify(config, null, 4) + "\n");
+
+    console.log(
+      `[Board Config] Updated arduino.json: board=${fqbn}${
+        sketch ? `, sketch=${sketch}` : ""
+      }`
+    );
+
+    res.json({
+      success: true,
+      config: {
+        board: config.board,
+        sketch: config.sketch,
+      },
+    });
+  } catch (error) {
+    console.error("[Board Config] Failed to update arduino.json:", error);
+    res.status(500).json({
+      error: "Failed to update board configuration",
+      details: error.message,
+    });
+  }
+});
+
+// --- Get Current Board Configuration ---
+app.get("/api/board-config", (req, res) => {
+  const arduinoJsonPath = path.join(WORKSPACE_ROOT, ".vscode", "arduino.json");
+
+  try {
+    if (!fs.existsSync(arduinoJsonPath)) {
+      return res.json({ config: null });
+    }
+
+    const content = fs.readFileSync(arduinoJsonPath, "utf8");
+    const config = JSON.parse(content);
+
+    res.json({ config });
+  } catch (error) {
+    console.error("[Board Config] Failed to read arduino.json:", error);
+    res.status(500).json({ error: "Failed to read board configuration" });
+  }
 });
 
 app.post("/api/restart", async (req, res) => {

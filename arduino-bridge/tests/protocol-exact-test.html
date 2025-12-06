@@ -93,6 +93,7 @@
 
     <script type="module">
       import { Bossa } from "../src/client/services/protocols/Bossa.js";
+      import { BOSSA_RENESAS } from "../src/client/config/boardProtocols.js";
 
       function log(msg, cls = "") {
         const el = document.getElementById("output");
@@ -116,9 +117,11 @@
        *
        * Source of Truth: ArduinoCore-renesas/extras/uno-r4-wifi-fwuploader-plugin/sam-ba/Samba.cpp
        *
-       * For a 63KB firmware with 2048-byte chunks (31 chunks):
+       * For a 63KB firmware with 4096-byte chunks (16 chunks):
        */
-      function getExpectedSequence(firmwareSize, chunkSize = 2048) {
+      function getExpectedSequence(firmwareSize, chunkSize = null) {
+        const effectiveChunkSize =
+          chunkSize || BOSSA_RENESAS.memory.chunkSize || 4096;
         const SRAM_OFFSET = 0x34; // From Samba.cpp: copyOffset = 0x34
         const sequence = [];
 
@@ -153,14 +156,14 @@
         });
 
         // ===== WRITE CHUNKS =====
-        const numChunks = Math.ceil(firmwareSize / chunkSize);
+        const numChunks = Math.ceil(firmwareSize / effectiveChunkSize);
 
         for (let i = 0; i < numChunks; i++) {
           const thisChunkSize = Math.min(
-            chunkSize,
-            firmwareSize - i * chunkSize
+            effectiveChunkSize,
+            firmwareSize - i * effectiveChunkSize
           );
-          const flashAddr = i * chunkSize;
+          const flashAddr = i * effectiveChunkSize;
 
           const sramHex = SRAM_OFFSET.toString(16).padStart(8, "0");
           const flashHex = flashAddr.toString(16).padStart(8, "0");
@@ -339,7 +342,7 @@
         output.innerHTML = "";
 
         const firmwareSize = 63 * 1024; // 63KB like demo_plotter
-        const chunkSize = 2048;
+        const chunkSize = BOSSA_RENESAS.memory.chunkSize || 4096;
         const numChunks = Math.ceil(firmwareSize / chunkSize);
 
         log("═".repeat(80), "header");

@@ -10,6 +10,7 @@
  */
 
 import { Bossa } from "../src/client/services/protocols/Bossa.js";
+import { BOSSA_RENESAS } from "../src/client/config/boardProtocols.js";
 
 // ============================================================================
 // MOCK PORT WITH TRACE CAPTURE
@@ -333,7 +334,8 @@ export class MockSerialPort {
  */
 export function generateReferenceTrace(firmwareSize, options = {}) {
   const trace = [];
-  const CHUNK_SIZE = options.chunkSize || 2048;
+  const CHUNK_SIZE =
+    options.chunkSize || BOSSA_RENESAS.memory.chunkSize || 4096;
   const SRAM_OFFSET = options.sramOffset || 0x34;
 
   let time = 0;
@@ -520,8 +522,11 @@ export async function runProtocolTest(
       1
     )} KB)`
   );
-  console.log(`   Chunk size: 2048 bytes`);
-  console.log(`   Expected chunks: ${Math.ceil(firmwareSize / 2048)}`);
+  const chunkSizeForDisplay = BOSSA_RENESAS.memory.chunkSize || 4096;
+  console.log(`   Chunk size: ${chunkSizeForDisplay} bytes`);
+  console.log(
+    `   Expected chunks: ${Math.ceil(firmwareSize / chunkSizeForDisplay)}`
+  );
 
   // Step 1: Generate reference trace
   console.log(
@@ -557,7 +562,7 @@ export async function runProtocolTest(
       firmware[i] = i & 0xff;
     }
 
-    const CHUNK_SIZE = 2048;
+    const CHUNK_SIZE = BOSSA_RENESAS.memory.chunkSize || 4096;
     const SRAM_OFFSET = 0x34;
     let flashAddr = 0;
 

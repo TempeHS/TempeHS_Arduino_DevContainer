@@ -203,7 +203,7 @@
           <div class="value" id="infoSize">-</div>
         </div>
         <div class="info-item">
-          <div class="label">Chunks (2KB)</div>
+          <div class="label">Chunks (4KB)</div>
           <div class="value" id="infoChunks">-</div>
         </div>
         <div class="info-item">
@@ -225,6 +225,7 @@
     <script type="module">
       import { Bossa } from "../src/client/services/protocols/Bossa.js";
       import { MockSerialPort } from "./browser-trace-test.js";
+      import { BOSSA_RENESAS } from "../src/client/config/boardProtocols.js";
 
       let firmwareData = null;
       let firmwareName = null;
@@ -260,6 +261,7 @@
           firmwareName = sketch;
 
           // Update info panel
+          const chunkSize = BOSSA_RENESAS.memory.chunkSize || 4096;
           document.getElementById("infoPanel").style.display = "block";
           document.getElementById("infoSketch").textContent = sketch;
           document.getElementById(
@@ -268,7 +270,7 @@
             firmwareData.length / 1024
           ).toFixed(1)} KB)`;
           document.getElementById("infoChunks").textContent = Math.ceil(
-            firmwareData.length / 2048
+            firmwareData.length / chunkSize
           );
           document.getElementById("infoEndAddr").textContent = `0x${(
             0x4000 + firmwareData.length
@@ -300,7 +302,7 @@
         traceLog = [];
         traceOutput.innerHTML = "";
 
-        const CHUNK_SIZE = 2048;
+        const CHUNK_SIZE = BOSSA_RENESAS.memory.chunkSize || 4096;
         const SRAM_OFFSET = 0x34;
 
         // Create mock port with trace capture

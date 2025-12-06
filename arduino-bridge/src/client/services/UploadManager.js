@@ -1,5 +1,5 @@
 import { AVRStrategy } from "./strategies/AVRStrategy.js";
-import { R4WifiStrategy } from "./strategies/R4WifiStrategy.js";
+import { BOSSAStrategy } from "./strategies/BOSSAStrategy.js";
 import { ESPToolStrategy } from "./strategies/ESPToolStrategy.js";
 import { TeensyStrategy } from "./strategies/TeensyStrategy.js";
 import { RP2040Strategy } from "./strategies/RP2040Strategy.js";
@@ -8,13 +8,13 @@ export class UploadManager {
   constructor() {
     this.strategies = {
       "arduino:avr": new AVRStrategy(),
-      "arduino:renesas_uno": new R4WifiStrategy(),
-      "arduino:samd": new R4WifiStrategy(),
+      "arduino:renesas_uno": new BOSSAStrategy(),
+      "arduino:samd": new BOSSAStrategy(),
       "arduino:esp32": new ESPToolStrategy(),
       "esp32:esp32": new ESPToolStrategy(),
       "teensy:avr": new TeensyStrategy(),
-      "arduino:mbed_nano": new R4WifiStrategy(),
-      "arduino:mbed_portenta": new R4WifiStrategy(),
+      "arduino:mbed_nano": new BOSSAStrategy(),
+      "arduino:mbed_portenta": new BOSSAStrategy(),
       "arduino:mbed_rp2040": new RP2040Strategy(),
       "rp2040:rp2040": new RP2040Strategy(),
     };

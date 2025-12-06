@@ -1,8 +1,8 @@
 {
-    "board": "arduino:avr:uno",
+    "board": "arduino:renesas_uno:unor4wifi",
     "port": "/tmp/arduinoUSB",
     "output": "./build",
     "programmer": "arduino",
-    "sketch": "demo_blink/demo_blink.ino",
+    "sketch": "demo_plotter/demo_plotter.ino",
     "configuration": "monitor_speed=115200"
 }

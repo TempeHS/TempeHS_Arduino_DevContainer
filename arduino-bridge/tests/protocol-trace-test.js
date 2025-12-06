@@ -15,6 +15,8 @@
  *   ...
  */
 
+import { BOSSA_RENESAS } from "../src/client/config/boardProtocols.js";
+
 // Simple timestamp helper
 function timestamp(startTime) {
   const elapsed = Date.now() - startTime;
@@ -243,7 +245,7 @@ class MockPort {
 function generateReferenceSambaTrace(firmwareSize) {
   const trace = [];
   let time = 0;
-  const CHUNK_SIZE = 2048;
+  const CHUNK_SIZE = BOSSA_RENESAS.memory.chunkSize || 4096;
   const SRAM_OFFSET = 0x34;
 
   const addTx = (cmd) => {
@@ -406,10 +408,11 @@ async function runTests() {
 
   // Test parameters (simulate demo_plotter: ~63KB)
   const TEST_FIRMWARE_SIZE = 63 * 1024;
+  const chunkSize = BOSSA_RENESAS.memory.chunkSize || 4096;
 
   console.log(`\nTest firmware size: ${TEST_FIRMWARE_SIZE} bytes`);
-  console.log(`Chunk size: 2048 bytes`);
-  console.log(`Expected chunks: ${Math.ceil(TEST_FIRMWARE_SIZE / 2048)}`);
+  console.log(`Chunk size: ${chunkSize} bytes`);
+  console.log(`Expected chunks: ${Math.ceil(TEST_FIRMWARE_SIZE / chunkSize)}`);
 
   // Generate reference trace from Samba.cpp expected behavior
   console.log(
@@ -428,7 +431,7 @@ async function runTests() {
   // Now we would run our implementation and capture its trace
   // For now, generate a "simulated actual" trace to demonstrate comparison
   console.log("\n[2] To test actual implementation:");
-  console.log("    1. Import Bossa.js and R4WifiStrategy.js");
+  console.log("    1. Import Bossa.js and BOSSAStrategy.js");
   console.log("    2. Use MockPort with trace capture");
   console.log("    3. Run flash() method");
   console.log("    4. Compare captured trace vs reference");
