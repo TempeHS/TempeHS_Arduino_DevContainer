@@ -1,13 +1,16 @@
+import { UploadLogger } from "../utils/UploadLogger.js";
+
 /**
  * BOSSA Protocol Implementation for Arduino R4 WiFi
  * Version: 1.2.0-minimal-logging
  */
 export class Bossa {
-  constructor(port) {
+  constructor(port, logger = null) {
     this.port = port;
     this.reader = null;
     this.writer = null;
     this.isSamd = false;
+    this.log = logger || new UploadLogger("BOSSA");
   }
 
   async connect() {
@@ -49,7 +52,12 @@ export class Bossa {
         else break;
       }
     } catch (e) {}
-    if (totalFlushed > 0) console.log(`[Bossa] Flushed ${totalFlushed} bytes`);
+    if (totalFlushed > 0)
+      this.log.info(
+        `Flushed ${totalFlushed} stray byte${
+          totalFlushed === 1 ? "" : "s"
+        } from serial buffer`
+      );
   }
 
   bytesToPrintable(bytes) {
@@ -69,7 +77,7 @@ export class Bossa {
 
     while (collected.length < 3) {
       if (Date.now() - start > timeout) {
-        console.log(`[Bossa] ❌ ${expectedCmd}# TIMEOUT`);
+        this.log.error(`${expectedCmd}# ACK timeout after ${timeout}ms`);
         return false;
       }
       const remaining = Math.max(0, timeout - (Date.now() - start));
@@ -92,7 +100,9 @@ export class Bossa {
     const gotHex = collected
       .map((b) => b.toString(16).padStart(2, "0"))
       .join(" ");
-    console.log(`[Bossa] ❌ ${expectedCmd}# WRONG ACK: [${gotHex}]`);
+    this.log.error(
+      `${expectedCmd}# ACK mismatch: received [${gotHex || "<empty>"}]`
+    );
     return false;
   }
 
@@ -126,23 +136,23 @@ export class Bossa {
 
   async hello(options = {}) {
     const { proceedOnFailure = false, attempts = 3 } = options;
-    console.log(`[Bossa] ═══ HANDSHAKE ═══`);
+    this.log.section("HANDSHAKE");
     let lastError = null;
 
     for (let attempt = 1; attempt <= attempts; attempt++) {
       try {
-        console.log(`[Bossa] → N#`);
+        this.log.command("N#", "Query bootloader (handshake start)");
         await this.writeCommand("N#");
         try {
           await this.readUntilTerminator({ timeout: 1000, maxBytes: 16 });
-          console.log(`[Bossa] ← N# OK`);
+          this.log.response("N# ACK", "Bootloader responded to handshake");
         } catch (e) {
-          console.log(`[Bossa] ← N# no ACK`);
+          this.log.warn("No ACK received after N# handshake command");
         }
 
         await this.delay(200);
 
-        console.log(`[Bossa] → V#`);
+        this.log.command("V#", "Request bootloader version string");
         await this.writeCommand("V#");
         const versionBytes = await this.readUntilTerminator({
           timeout: 2000,
@@ -150,26 +160,28 @@ export class Bossa {
         });
         const version = this.bytesToPrintable(versionBytes);
         if (!version) throw new Error("Empty version");
-        console.log(`[Bossa] ← Version: ${version}`);
+        this.log.response(version, "Bootloader version string");
 
         try {
           await this.delay(25);
-          console.log(`[Bossa] → I#`);
+          this.log.command("I#", "Request bootloader info string");
           await this.writeCommand("I#");
           const infoBytes = await this.readUntilTerminator({
             timeout: 500,
             maxBytes: 64,
           });
           const info = this.bytesToPrintable(infoBytes);
-          if (info) console.log(`[Bossa] ← Info: ${info}`);
+          if (info) this.log.response(info, "Bootloader info string");
         } catch (e) {}
 
         if (version.includes("Arduino")) this.isSamd = true;
-        console.log(`[Bossa] ═══ HANDSHAKE OK ═══`);
+        this.log.success("Handshake successful");
         return version;
       } catch (err) {
         lastError = err;
-        console.log(`[Bossa] Attempt ${attempt} failed: ${err.message}`);
+        this.log.warn(
+          `Handshake attempt ${attempt} failed: ${err.message || err}`
+        );
         if (attempt < attempts) {
           await this.flush(100);
           await this.delay(200);
@@ -177,20 +189,32 @@ export class Bossa {
       }
     }
 
-    if (proceedOnFailure) return "ASSUMED:Arduino Bootloader";
+    if (proceedOnFailure) {
+      this.log.warn(
+        "Proceeding despite handshake failure (proceedOnFailure enabled)"
+      );
+      return "ASSUMED:Arduino Bootloader";
+    }
+    this.log.error("Handshake failed after all attempts");
     throw lastError || new Error("Handshake failed");
   }
 
   async chipErase(startAddr) {
     const addrHex = startAddr.toString(16).padStart(8, "0");
-    console.log(`[Bossa] ═══ ERASE ═══`);
-    console.log(`[Bossa] → X${addrHex}#`);
+    this.log.command(
+      `X${addrHex}#`,
+      "Chip erase command - bootloader erases flash pages"
+    );
     await this.writeCommand(`X${addrHex}#`);
 
     const start = Date.now();
     const ok = await this.readAck("X", 5000);
     const ms = Date.now() - start;
-    console.log(`[Bossa] ← X ${ok ? "OK" : "FAILED"} (${ms}ms)`);
+    if (ok) {
+      this.log.response("X# ACK", `Chip erase acknowledged in ${ms}ms`);
+    } else {
+      this.log.error(`Chip erase failed after ${ms}ms`);
+    }
   }
 
   async writeBinary(address, data) {
@@ -201,10 +225,12 @@ export class Bossa {
     const firstBytes = Array.from(data.slice(0, Math.min(8, data.length)))
       .map((b) => b.toString(16).padStart(2, "0"))
       .join(" ");
-    console.log(
-      `[Bossa] → S${addrHex},${sizeHex}# (${data.length} bytes to data_buffer[0x${addrHex}])`
+    this.log.command(
+      `S${addrHex},${sizeHex}#`,
+      `Write ${data.length} bytes to data_buffer[0x${addrHex}]`
     );
-    console.log(`[Bossa]   First bytes: ${firstBytes}...`);
+    if (data.length)
+      this.log.info(`Payload preview: ${firstBytes}... (first bytes)`);
 
     await this.writeCommand(`S${addrHex},${sizeHex}#`);
     await this.delay(5);
@@ -229,10 +255,14 @@ export class Bossa {
     await this.writeCommand(`Y${srcHex},0#`);
     const ack1 = await this.readAck("Y", 1000);
     const ySrcElapsed = Date.now() - ySrcStart;
-    console.log(
-      `[Bossa] Y(src 0x${srcHex}) ${ack1 ? "OK" : "FAIL"} in ${ySrcElapsed}ms`
-    );
-    if (!ack1) console.log(`[Bossa] ❌ Y(src) FAILED`);
+    if (ack1) {
+      this.log.response(
+        `Y${srcHex},0# ACK`,
+        `Source buffer pointer accepted in ${ySrcElapsed}ms`
+      );
+    } else {
+      this.log.error(`Y${srcHex},0# failed after ${ySrcElapsed}ms`);
+    }
 
     await this.delay(2);
 
@@ -242,28 +272,37 @@ export class Bossa {
     await this.writeCommand(`Y${dstHex},${sizeHex}#`);
     const ack2 = await this.readAck("Y", 5000);
     const yFlashElapsed = Date.now() - yFlashStart;
-    console.log(
-      `[Bossa] Y(flash 0x${dstHex}, ${size} bytes) ${
-        ack2 ? "OK" : "FAIL"
-      } in ${yFlashElapsed}ms`
-    );
-    if (!ack2) console.log(`[Bossa] ❌ Y(flash@0x${dstHex}) FAILED`);
+    if (ack2) {
+      this.log.response(
+        `Y${dstHex},${sizeHex}# ACK`,
+        `Copied ${size} bytes to flash in ${yFlashElapsed}ms`
+      );
+    } else {
+      this.log.error(`Y${dstHex},${sizeHex}# failed after ${yFlashElapsed}ms`);
+    }
   }
 
   async reset() {
-    console.log(`[Bossa] ═══ RESET ═══`);
+    this.log.section("RESET");
     // Flush any pending data in serial buffer before sending reset
     await this.flush(100);
-    console.log(`[Bossa] → K#`);
+    this.log.command("K#", "System reset via NVIC_SystemReset() call");
     await this.writeCommand("K#");
     // Board resets almost immediately, so we may not get ACK
     const ok = await this.readAck("K", 1000);
-    console.log(`[Bossa] ← K ${ok ? "OK" : "(board reset - expected)"}`);
+    if (ok) {
+      this.log.response("K# ACK", "Board acknowledged reset command");
+    } else {
+      this.log.warn("No ACK to K# (board likely reset immediately)");
+    }
   }
 
   async go(address) {
     const addrHex = address.toString(16).padStart(8, "0");
-    console.log(`[Bossa] → G${addrHex}#`);
+    this.log.command(
+      `G${addrHex}#`,
+      `Execute application starting at ${UploadLogger.formatAddr(address)}`
+    );
     await this.writeCommand(`G${addrHex}#`);
   }
 
@@ -360,7 +399,12 @@ export class Bossa {
   async verifyCRC(address, size, expectedData) {
     const addrHex = address.toString(16).padStart(8, "0");
     const sizeHex = size.toString(16).padStart(8, "0");
-    console.log(`[Bossa] → Z${addrHex},${sizeHex}# (CRC verify)`);
+    this.log.command(
+      `Z${addrHex},${sizeHex}#`,
+      `Verify ${UploadLogger.formatSize(size)} at ${UploadLogger.formatAddr(
+        address
+      )} using device CRC`
+    );
     await this.delay(100);
     await this.flush(50);
     await this.writeCommand(`Z${addrHex},${sizeHex}#`);
@@ -370,28 +414,46 @@ export class Bossa {
         maxBytes: 16,
       });
       const responseStr = String.fromCharCode(...response);
-      console.log(
-        `[Bossa] ← Z response: "${responseStr
-          .replace(/\r/g, "<CR>")
-          .replace(/\n/g, "<LF>")}"`
+      const cleanedResponse = responseStr
+        .replace(/\r/g, "<CR>")
+        .replace(/\n/g, "<LF>");
+      this.log.response(
+        `Z response: "${cleanedResponse}"`,
+        "Device-supplied CRC digest"
       );
       const match = responseStr.match(/Z([0-9A-Fa-f]{8})#/);
       if (!match) {
-        console.log(`[Bossa] ❌ No CRC match in response`);
+        this.log.error(
+          "CRC verification failed",
+          "SAM-BA response did not include CRC value"
+        );
         return false;
       }
       const flashCRC = parseInt(match[1], 16);
       const expectedCRC = Bossa.calculateCRC16(expectedData.slice(0, size));
-      console.log(
-        `[Bossa] Flash CRC: 0x${flashCRC
+      this.log.info(
+        `Flash CRC: 0x${flashCRC
           .toString(16)
           .padStart(4, "0")}, Expected: 0x${expectedCRC
           .toString(16)
           .padStart(4, "0")}`
       );
-      return flashCRC === expectedCRC;
+      const crcMatch = flashCRC === expectedCRC;
+      if (crcMatch) {
+        this.log.success("Device CRC matches expected image");
+      } else {
+        this.log.error(
+          "Device CRC mismatch",
+          `Device reported 0x${flashCRC
+            .toString(16)
+            .padStart(4, "0")} but expected 0x${expectedCRC
+            .toString(16)
+            .padStart(4, "0")}`
+        );
+      }
+      return crcMatch;
     } catch (e) {
-      console.log(`[Bossa] ❌ CRC verification exception: ${e.message}`);
+      this.log.error("CRC verification exception", e);
       return false;
     }
   }

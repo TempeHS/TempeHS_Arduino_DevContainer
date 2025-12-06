@@ -9,6 +9,7 @@ import {
   getProtocolConfig,
   getChunkSize,
 } from "../../config/boardProtocols.js";
+import { UploadLogger } from "../utils/UploadLogger.js";
 
 /**
  * BOSSA Upload Strategy using SAM-BA Protocol
@@ -42,6 +43,7 @@ import {
 export class BOSSAStrategy {
   constructor() {
     this.name = "BOSSA/SAM-BA";
+    this.log = new UploadLogger("BOSSA");
 
     // Load configuration from centralized config (matches YAML protocol files)
     this.config = BOSSA_RENESAS_CONFIG;
@@ -89,7 +91,7 @@ export class BOSSAStrategy {
         await port.close();
       }
     } catch (e) {
-      console.warn(`[BOSSA] Port close warning: ${e.message}`);
+      this.log.warn(`Port close warning: ${e.message}`);
     }
     // Wait for OS to release
     await new Promise((r) => setTimeout(r, 100));
@@ -106,37 +108,45 @@ export class BOSSAStrategy {
    *   (wait ~500ms)
    */
   async perform1200Touch(port) {
-    console.log("[BOSSA] === 1200 BAUD TOUCH (matching USB capture) ===");
+    this.log.section("1200 BAUD TOUCH SEQUENCE");
+    this.log.info("Matching exact USB capture sequence (R4.pcapng)");
 
     await this.safeClose(port);
 
     // Step 1: First SET_LINE_CODING at 1200 baud
-    console.log("[BOSSA] Opening at 1200 baud (first SET_LINE_CODING)...");
+    this.log.serialConfig(
+      this.TOUCH_BAUD,
+      "First SET_LINE_CODING - open at 1200 baud"
+    );
     await port.open({ baudRate: this.TOUCH_BAUD });
 
     // Step 2: SET_CONTROL_LINE_STATE = DTR=1, RTS=1 (0x0003)
-    console.log("[BOSSA] Setting DTR=1, RTS=1");
+    this.log.signal("DTR", true, "SET_CONTROL_LINE_STATE = 0x0003");
+    this.log.signal("RTS", true, "Both control lines HIGH");
     await port.setSignals({ dataTerminalReady: true, requestToSend: true });
 
     // Step 3: Second SET_LINE_CODING at 1200 (close and reopen to force)
-    console.log("[BOSSA] Forcing second SET_LINE_CODING...");
+    this.log.info("Forcing second SET_LINE_CODING by close/reopen");
     await port.close();
     await new Promise((r) => setTimeout(r, 10));
     await port.open({ baudRate: this.TOUCH_BAUD });
 
     // Step 4: SET_CONTROL_LINE_STATE = DTR=0, RTS=1 (0x0002) - triggers reset
-    console.log("[BOSSA] Setting DTR=0, RTS=1 (trigger reset)");
+    this.log.signal("DTR", false, "DTR LOW triggers reset on R4 boards");
+    this.log.signal("RTS", true, "RTS stays HIGH");
     await port.setSignals({ dataTerminalReady: false, requestToSend: true });
 
     // Close port
-    console.log("[BOSSA] Closing port after touch");
+    this.log.info("Closing port after touch sequence");
     await port.close();
 
     // Wait ~500ms for device reset (matching USB capture timing)
-    console.log("[BOSSA] Waiting 500ms for device reset...");
+    this.log.wait(500, "Wait for RA4M1 to reset and enter SAM-BA bootloader");
     await new Promise((r) => setTimeout(r, 500));
 
-    console.log("[BOSSA] 1200 baud touch complete");
+    this.log.success(
+      "1200 baud touch complete - device should be in bootloader mode"
+    );
   }
 
   /**
@@ -146,9 +156,7 @@ export class BOSSAStrategy {
    * @returns { result: 'ascii'|'garbage'|'timeout', bossa?, bytes? }
    */
   async fastProbe(port, baudRate, timeoutMs = 2000) {
-    console.log(
-      `[BOSSA] Fast probe at ${baudRate} baud (${timeoutMs}ms timeout)...`
-    );
+    this.log.info(`Probing at ${baudRate} baud (${timeoutMs}ms timeout)...`);
 
     try {
       await this.safeClose(port);
@@ -160,6 +168,10 @@ export class BOSSAStrategy {
       await bossa.connect();
 
       // Send N# to trigger response
+      this.log.command(
+        "N#",
+        "Query bootloader - expects ASCII response if correct baud rate"
+      );
       await bossa.writeCommand("N#");
 
       // Wait for data with early exit
@@ -186,14 +198,14 @@ export class BOSSAStrategy {
               new Uint8Array(collected)
             );
             if (isAscii) {
-              console.log(`[BOSSA] ✓ ASCII data detected at ${baudRate}!`);
+              this.log.success(`ASCII data detected at ${baudRate} baud!`);
               return {
                 result: "ascii",
                 bossa,
                 bytes: new Uint8Array(collected),
               };
             } else {
-              console.log(`[BOSSA] ✗ Garbage data at ${baudRate} - wrong baud`);
+              this.log.warn(`Garbage data at ${baudRate} - wrong baud rate`);
               await bossa.disconnect();
               await this.safeClose(port);
               return { result: "garbage", bytes: new Uint8Array(collected) };
@@ -206,23 +218,12 @@ export class BOSSAStrategy {
         if (done) break;
 
         if (value && value.length) {
-          // Log every byte received
-          const rxTime = new Date().toISOString().slice(11, 23);
-          const hex = Array.from(value)
-            .map((b) => b.toString(16).padStart(2, "0"))
-            .join(" ");
-          const asciiDetail = Array.from(value)
-            .map((b) => {
-              if (b === 0x0a) return "<LF>";
-              if (b === 0x0d) return "<CR>";
-              if (b >= 0x20 && b <= 0x7e) return String.fromCharCode(b);
-              return `<0x${b.toString(16).padStart(2, "0")}>`;
-            })
-            .join("");
-          console.log(
-            `[BOSSA ${rxTime}] 📥 Probe RX (${value.length} bytes): ${hex}`
+          // Log received data
+          this.log.rx(
+            `Probe response (${value.length} bytes)`,
+            value,
+            `Testing if data is valid ASCII at ${baudRate} baud`
           );
-          console.log(`[BOSSA ${rxTime}] 📥 Probe ASCII: ${asciiDetail}`);
 
           collected.push(...value);
 
@@ -233,8 +234,8 @@ export class BOSSAStrategy {
             );
             if (isAscii) {
               // ASCII! This is the right baud rate - return immediately
-              console.log(
-                `[BOSSA] ✓ ASCII data detected at ${baudRate}! (${collected.length} bytes)`
+              this.log.success(
+                `ASCII data confirmed at ${baudRate} baud (${collected.length} bytes)`
               );
               return {
                 result: "ascii",
@@ -243,8 +244,8 @@ export class BOSSAStrategy {
               };
             } else if (collected.length >= 4) {
               // Got enough garbage data - wrong baud rate, exit early
-              console.log(
-                `[BOSSA] ✗ Garbage data at ${baudRate} - wrong baud (${collected.length} bytes)`
+              this.log.warn(
+                `Garbage data at ${baudRate} - wrong baud rate (${collected.length} bytes)`
               );
               await bossa.disconnect();
               await this.safeClose(port);
@@ -256,7 +257,7 @@ export class BOSSAStrategy {
 
       // Timeout with no data
       if (collected.length === 0) {
-        console.log(`[BOSSA] ✗ No response at ${baudRate} (timeout)`);
+        this.log.warn(`No response at ${baudRate} baud (timeout)`);
         await bossa.disconnect();
         await this.safeClose(port);
         return { result: "timeout" };
@@ -272,7 +273,7 @@ export class BOSSAStrategy {
         return { result: "garbage", bytes: new Uint8Array(collected) };
       }
     } catch (e) {
-      console.log(`[BOSSA] ✗ Error at ${baudRate}: ${e.message}`);
+      this.log.error(`Error probing at ${baudRate}`, e);
       await this.safeClose(port);
       return { result: "timeout" };
     }
@@ -288,6 +289,7 @@ export class BOSSAStrategy {
       bossa.reader = bossa.port.readable.getReader();
 
       // Send V# to get version
+      this.log.command("V#", "Request bootloader version string");
       await bossa.writeCommand("V#");
 
       const collected = [];
@@ -320,13 +322,14 @@ export class BOSSAStrategy {
           .map((b) => (b >= 0x20 && b <= 0x7e ? String.fromCharCode(b) : ""))
           .join("")
           .trim();
-        console.log(`[BOSSA] ✓✓ Version: ${version}`);
+        this.log.success(`Bootloader version: ${version}`);
         return { success: true, version };
       }
 
+      this.log.info(`Connected at ${baudRate} baud (no version string)`);
       return { success: true, version: `Connected at ${baudRate}` };
     } catch (e) {
-      console.warn(`[BOSSA] Handshake warning: ${e.message}`);
+      this.log.warn(`Handshake warning: ${e.message}`);
       return { success: true, version: `Connected at ${baudRate}` };
     }
   }
@@ -360,10 +363,9 @@ export class BOSSAStrategy {
    * 2. When trying all baud rates, only wait long enough to get data and decide
    */
   async fastBaudProbe(port) {
-    console.log("[BOSSA] ========================================");
-    console.log("[BOSSA] Ultra-fast baud detection starting...");
-    console.log(`[BOSSA] Primary baud: ${this.PRIMARY_BAUD}`);
-    console.log("[BOSSA] ========================================");
+    this.log.section("BAUD RATE DETECTION");
+    this.log.info(`Primary baud rate: ${this.PRIMARY_BAUD}`);
+    this.log.info("Will probe for valid ASCII response from bootloader");
 
     // Step 1: Try primary baud (115200) with full timeout
     const primaryResult = await this.fastProbe(port, this.PRIMARY_BAUD, 2000);
@@ -380,12 +382,14 @@ export class BOSSAStrategy {
 
     if (primaryResult.result === "timeout") {
       // No response at all - device probably not in bootloader mode
-      console.log("[BOSSA] No response at primary baud - needs manual reset");
+      this.log.warn(
+        "No response at primary baud - device may need manual reset"
+      );
       return { success: false, needsManualReset: true, reason: "no_response" };
     }
 
     // Got garbage - device is responding but at different baud rate
-    console.log("[BOSSA] Got response but wrong baud - scanning all rates...");
+    this.log.info("Got response but wrong baud rate - scanning all rates...");
 
     // Step 2: Try all baud rates with short timeouts (just need enough data to decide)
     for (const baudRate of this.ALL_BAUD_RATES) {
@@ -405,7 +409,7 @@ export class BOSSAStrategy {
     }
 
     // None worked
-    console.log("[BOSSA] No baud rate produced valid ASCII response");
+    this.log.error("No baud rate produced valid ASCII response");
     return { success: false, needsManualReset: false, reason: "no_valid_baud" };
   }
 
@@ -416,10 +420,7 @@ export class BOSSAStrategy {
   async waitForAnyData(reader, timeoutMs) {
     const collected = [];
     const startTime = Date.now();
-    const timestamp = new Date().toISOString().slice(11, 23);
-    console.log(
-      `[BOSSA ${timestamp}] Waiting for data (timeout: ${timeoutMs}ms)...`
-    );
+    this.log.info(`Waiting for data (${timeoutMs}ms timeout)...`);
 
     try {
       while (Date.now() - startTime < timeoutMs) {
@@ -444,29 +445,14 @@ export class BOSSAStrategy {
         if (done) break;
 
         if (value && value.length) {
-          const rxTime = new Date().toISOString().slice(11, 23);
-          const hex = Array.from(value)
-            .map((b) => b.toString(16).padStart(2, "0"))
-            .join(" ");
-          const asciiDetail = Array.from(value)
-            .map((b) => {
-              if (b === 0x0a) return "<LF>";
-              if (b === 0x0d) return "<CR>";
-              if (b >= 0x20 && b <= 0x7e) return String.fromCharCode(b);
-              return `<0x${b.toString(16).padStart(2, "0")}>`;
-            })
-            .join("");
-          console.log(
-            `[BOSSA ${rxTime}] 📥 RX (${value.length} bytes): ${hex}`
-          );
-          console.log(`[BOSSA ${rxTime}] 📥 RX ASCII: ${asciiDetail}`);
+          this.log.rx(`Data received (${value.length} bytes)`, value);
           collected.push(...value);
           // Got some data, wait a bit more for complete response
           await new Promise((r) => setTimeout(r, 50));
         }
       }
     } catch (e) {
-      console.warn(`[BOSSA] Read error: ${e.message}`);
+      this.log.warn(`Read error: ${e.message}`);
     }
 
     const elapsed = Date.now() - startTime;
@@ -478,13 +464,11 @@ export class BOSSAStrategy {
       const ascii = Array.from(bytes)
         .map((b) => (b >= 0x20 && b <= 0x7e ? String.fromCharCode(b) : "."))
         .join("");
-      console.log(
-        `[BOSSA] ✅ Received ${collected.length} bytes in ${elapsed}ms`
-      );
+      this.log.success(`Received ${collected.length} bytes in ${elapsed}ms`);
       return { gotData: true, bytes, hex, ascii };
     }
 
-    console.log(`[BOSSA] ⏱️ No data received after ${elapsed}ms`);
+    this.log.warn(`No data received after ${elapsed}ms`);
     return { gotData: false };
   }
 
@@ -496,32 +480,34 @@ export class BOSSAStrategy {
   }
 
   async prepare(port, fqbn) {
-    console.log("[BOSSA] ========================================");
-    console.log("[BOSSA] PREPARE: Attempting bootloader entry");
-    console.log("[BOSSA] ========================================");
+    this.log.section("PREPARE: Bootloader Entry for BOSSA/SAM-BA");
 
     const info = port.getInfo();
     const pid = info.usbProductId;
     const vid = info.usbVendorId;
-    console.log(
-      `[BOSSA] Device: VID=0x${vid?.toString(16)}, PID=0x${pid?.toString(16)}`
-    );
+    this.log.device(vid, pid, "Checking if device is in bootloader mode");
 
     // Check if already in bootloader mode (different PID)
     const BOOTLOADER_PIDS = [0x006d, 0x0054, 0x0057, 0x0069];
     if (pid && BOOTLOADER_PIDS.includes(pid)) {
-      console.log("[BOSSA] Already in bootloader mode (detected by PID)");
+      this.log.success("Device already in bootloader mode (detected by PID)");
+      this.log.info(
+        `Bootloader PID: 0x${pid.toString(16)} is a known bootloader PID`
+      );
       return;
     }
 
+    this.log.info("Device not in bootloader mode - performing 1200 baud touch");
     // Try the 1200 baud touch
     await this.perform1200Touch(port);
   }
 
   async flash(port, data, progressCallback, fqbn) {
-    console.log("[BOSSA] ========================================");
-    console.log("[BOSSA] FLASH: Starting upload to R4 WiFi");
-    console.log("[BOSSA] ========================================");
+    this.log.section(
+      "FLASH: Uploading Firmware to R4 WiFi via SAM-BA Protocol"
+    );
+    this.log.info(`Firmware size: ${UploadLogger.formatSize(data.byteLength)}`);
+    this.log.info(`Board FQBN: ${fqbn || "unknown"}`);
 
     let bossa = null;
     let workingBaud = null;
@@ -534,24 +520,32 @@ export class BOSSAStrategy {
       await this.safeClose(port);
 
       // USB capture shows SET_LINE_CODING sent twice at 230400
-      // First open
+      this.log.serialConfig(
+        this.PRIMARY_BAUD,
+        "Opening at primary baud (first SET_LINE_CODING)"
+      );
       await port.open({ baudRate: this.PRIMARY_BAUD });
       await port.setSignals({ dataTerminalReady: true, requestToSend: true });
 
       // Force second SET_LINE_CODING by closing and reopening
+      this.log.info("Forcing second SET_LINE_CODING by close/reopen");
       await port.close();
       await new Promise((r) => setTimeout(r, 10));
       await port.open({ baudRate: this.PRIMARY_BAUD });
       await port.setSignals({ dataTerminalReady: true, requestToSend: true });
 
       // Wait ~111ms before N# (matching USB capture)
+      this.log.wait(110, "Match USB capture timing before sending N#");
       await new Promise((r) => setTimeout(r, 110));
 
       bossa = new Bossa(port);
       await bossa.connect();
 
       // Send N# to verify bootloader is responding
-      console.log("[BOSSA] Sending N# command to verify bootloader...");
+      this.log.command(
+        "N#",
+        "Verify bootloader is responding (chip info query)"
+      );
       await bossa.writeCommand("N#");
 
       // Wait for response
@@ -559,21 +553,21 @@ export class BOSSAStrategy {
 
       if (response.gotData && this.isValidAsciiResponse(response.bytes)) {
         workingBaud = this.PRIMARY_BAUD;
-        console.log(`[BOSSA] ✓✓ Connected at ${workingBaud}`);
-        console.log(`[BOSSA] Response: ${response.ascii}`);
+        this.log.success(`Connected to bootloader at ${workingBaud} baud`);
+        this.log.info(`Response: ${response.ascii}`);
       } else {
-        console.log("[BOSSA] No valid response at primary baud");
+        this.log.warn("No valid response at primary baud rate");
         await bossa.disconnect();
         await this.safeClose(port);
       }
     } catch (e) {
-      console.log(`[BOSSA] Error at ${this.PRIMARY_BAUD}: ${e.message}`);
+      this.log.error(`Error connecting at ${this.PRIMARY_BAUD}`, e);
       await this.safeClose(port);
     }
 
     // If primary baud failed, try all baud rates
     if (!workingBaud) {
-      console.log("[BOSSA] Trying all baud rates...");
+      this.log.info("Primary baud failed - scanning all baud rates...");
       for (const baudRate of this.ALL_BAUD_RATES) {
         if (baudRate === this.PRIMARY_BAUD) continue;
 
@@ -581,6 +575,7 @@ export class BOSSAStrategy {
 
         try {
           await this.safeClose(port);
+          this.log.serialConfig(baudRate, `Testing alternate baud rate`);
           await port.open({ baudRate });
           await port.setSignals({
             dataTerminalReady: true,
@@ -591,19 +586,20 @@ export class BOSSAStrategy {
           bossa = new Bossa(port);
           await bossa.connect();
 
+          this.log.command("N#", "Query bootloader at this baud rate");
           await bossa.writeCommand("N#");
           const response = await this.waitForResponse(bossa.reader, 1000);
 
           if (response.gotData && this.isValidAsciiResponse(response.bytes)) {
             workingBaud = baudRate;
-            console.log(`[BOSSA] ✓✓ Connected at ${workingBaud}`);
+            this.log.success(`Connected at ${workingBaud} baud`);
             break;
           } else {
             await bossa.disconnect();
             await this.safeClose(port);
           }
         } catch (e) {
-          console.log(`[BOSSA] Error at ${baudRate}: ${e.message}`);
+          this.log.warn(`Error at ${baudRate}: ${e.message}`);
           await this.safeClose(port);
         }
       }
@@ -611,9 +607,9 @@ export class BOSSAStrategy {
 
     // If no baud rate worked, prompt user for manual reset
     if (!workingBaud) {
-      console.log("[BOSSA] ========================================");
-      console.log("[BOSSA] MANUAL BOOTLOADER ENTRY REQUIRED");
-      console.log("[BOSSA] ========================================");
+      this.log.section("MANUAL BOOTLOADER ENTRY REQUIRED");
+      this.log.warn("Could not connect to bootloader at any baud rate");
+      this.log.info("User needs to double-tap RESET button on Arduino");
 
       if (progressCallback) {
         progressCallback(
@@ -628,6 +624,7 @@ export class BOSSAStrategy {
       }
 
       // Wait for board to enter bootloader and try again
+      this.log.wait(1000, "Waiting for board to enter bootloader mode");
       await new Promise((r) => setTimeout(r, 1000));
 
       if (progressCallback)
@@ -642,21 +639,23 @@ export class BOSSAStrategy {
         bossa = new Bossa(port);
         await bossa.connect();
 
+        this.log.command("N#", "Retry bootloader query after manual reset");
         await bossa.writeCommand("N#");
         const response = await this.waitForResponse(bossa.reader, 2000);
 
         if (response.gotData && this.isValidAsciiResponse(response.bytes)) {
           workingBaud = this.PRIMARY_BAUD;
-          console.log(
-            `[BOSSA] ✓✓ Connected after manual reset at ${workingBaud}`
+          this.log.success(
+            `Connected after manual reset at ${workingBaud} baud`
           );
         }
       } catch (e) {
-        console.log(`[BOSSA] Error after manual reset: ${e.message}`);
+        this.log.error("Error after manual reset", e);
       }
     }
 
     if (!workingBaud) {
+      this.log.error("Failed to connect to bootloader at any baud rate");
       throw new Error(
         "Failed to connect to bootloader at any baud rate.\n\n" +
           "Please ensure:\n" +
@@ -716,13 +715,26 @@ export class BOSSAStrategy {
         sramBufferA = 0x34;
         sramBufferB = 0x34; // Same buffer, no double-buffering
       }
-      console.log(
-        `[BOSSA] Flash write offset: 0x${flashWriteOffset.toString(
-          16
-        )} (physical: 0x${(flashWriteOffset + 0x4000).toString(16)})`
+
+      this.log.info("Flash memory layout (Renesas RA4M1):");
+      this.log.memory(
+        "FLASH_WRITE",
+        flashWriteOffset,
+        0,
+        `Y command offset (bootloader adds 0x4000 internally → physical 0x${(
+          flashWriteOffset + 0x4000
+        ).toString(16)})`
       );
-      console.log(`[BOSSA] Execution (go) offset: 0x${goOffset.toString(16)}`);
-      console.log(`[BOSSA] data_buffer offset: 0x${sramBufferA.toString(16)}`);
+      this.log.info(
+        `Execution entry point: ${UploadLogger.formatAddr(
+          goOffset
+        )} (G command uses absolute address)`
+      );
+      this.log.info(
+        `Data buffer offset: ${UploadLogger.formatAddr(
+          sramBufferA
+        )} (into bootloader's data_buffer[8192])`
+      );
 
       // Get chunk size from config (used for both padding and writing)
       const protocolConfig = getProtocolConfig(fqbn) || this.config;
@@ -738,15 +750,19 @@ export class BOSSAStrategy {
       // Fill padding with 0xFF (erased flash state)
       firmware.fill(0xff, originalSize);
       const totalBytes = firmware.length;
-      console.log(
-        `[BOSSA] Firmware padded from ${originalSize} to ${totalBytes} bytes (${chunkSize}-byte boundary)`
+      this.log.info(
+        `Firmware: ${originalSize} bytes → padded to ${totalBytes} bytes (${chunkSize}-byte boundary)`
       );
 
       // Step 1: Upload flash applet (matches Arduino IDE protocol from Wireshark)
       // The IDE uploads a 52-byte applet to data_buffer[0] before writing firmware
       // This applet is ARM Thumb code used for flash operations
       if (fqbn && fqbn.includes("renesas_uno")) {
-        console.log(`[BOSSA] Uploading flash applet (52 bytes)...`);
+        this.log.section("FLASH APPLET UPLOAD");
+        this.log.info(
+          "Uploading 52-byte ARM Thumb flash applet to data_buffer[0]"
+        );
+        this.log.info("This applet assists with flash write operations");
         if (progressCallback) progressCallback(10, "Uploading flash applet...");
 
         // Flash applet extracted from Arduino IDE Wireshark capture (R4.pcapng)
@@ -805,34 +821,54 @@ export class BOSSAStrategy {
           0x00,
           0x00, // 52 bytes (0x34) total
         ]);
+        this.log.command(
+          "S00000000,00000034#",
+          "Write 52 bytes to data_buffer[0x00] (flash applet)"
+        );
         await bossa.writeBinary(0x00, FLASH_APPLET);
-        console.log(`[BOSSA] Flash applet uploaded`);
+        this.log.success("Flash applet uploaded");
 
         // W# register commands from Arduino IDE (flash configuration)
         // W00000030,00000400# and W00000020,00000000#
-        console.log(`[BOSSA] Configuring flash registers...`);
+        this.log.info("Configuring flash registers via W# commands");
+        this.log.command(
+          "W00000030,00000400#",
+          "Write 0x400 to register at 0x30 (flash config)"
+        );
         await bossa.writeWord(0x30, 0x400);
+        this.log.command(
+          "W00000020,00000000#",
+          "Write 0x00 to register at 0x20 (flash config)"
+        );
         await bossa.writeWord(0x20, 0x00);
-        console.log(`[BOSSA] Flash registers configured`);
+        this.log.success("Flash registers configured");
       }
 
       // Step 2: Erase flash (required for R4)
-      console.log(`[BOSSA] Erasing flash...`);
+      this.log.section("FLASH ERASE");
       if (progressCallback) progressCallback(12, "Erasing flash...");
 
       // Calculate number of pages to erase (R4 page size is 8192 bytes / 0x2000)
       const erasePageSize = 0x2000; // 8KB pages for Renesas RA4M1
       const pagesToErase = Math.ceil(totalBytes / erasePageSize);
-      console.log(
-        `[BOSSA] Erasing ${pagesToErase} pages (${totalBytes} bytes)`
+      this.log.memory(
+        "ERASE",
+        flashWriteOffset + 0x4000,
+        totalBytes,
+        `Erase ${pagesToErase} pages (${erasePageSize} bytes per page)`
+      );
+      this.log.command(
+        `X${flashWriteOffset.toString(16).padStart(8, "0")}#`,
+        "Chip erase command - erases flash from offset to end of firmware"
       );
 
       // Use the chipErase method which properly waits for X command ACK
       // X command also has internal 0x4000 offset added by bootloader
       await bossa.chipErase(flashWriteOffset);
-      console.log(`[BOSSA] Flash erased, starting write...`);
+      this.log.success("Flash erased successfully");
 
-      // Step 2: Write flash in chunks
+      // Step 3: Write flash in chunks
+      this.log.section("FLASH WRITE");
       //
       // SAM-BA R4 WiFi protocol (from bootloader source + Wireshark capture):
       // 1. S[buffer_offset],[size]# - Write data to bootloader's data_buffer[]
@@ -843,14 +879,10 @@ export class BOSSAStrategy {
       // Chunk size already determined above from config (MUST match Wireshark capture!)
       // Renesas: 4096 bytes (0x1000) - verified in R4.pcapng
       const numChunks = Math.ceil(totalBytes / chunkSize);
-      console.log(
-        `[BOSSA] Writing ${totalBytes} bytes in ${numChunks} chunks (${chunkSize} bytes each)...`
+      this.log.info(
+        `Writing ${totalBytes} bytes in ${numChunks} chunks of ${chunkSize} bytes`
       );
-      console.log(
-        `[BOSSA] Chunk size from config: ${chunkSize} (protocol: ${
-          protocolConfig.variant || "default"
-        })`
-      );
+      this.log.info(`Protocol variant: ${protocolConfig.variant || "default"}`);
       if (progressCallback) progressCallback(15, "Writing flash...");
 
       // flashAddr is the Y command flash offset (bootloader adds 0x4000)
@@ -863,15 +895,33 @@ export class BOSSAStrategy {
         const chunk = firmware.subarray(i, Math.min(i + chunkSize, totalBytes));
         const isLastChunk = i + chunkSize >= totalBytes;
 
-        // Log: CHUNK #/total @ flash_addr (size bytes)
-        console.log(
-          `[BOSSA] CHUNK ${chunkNum}/${numChunks} @ 0x${flashAddr.toString(
-            16
-          )} (${chunk.length}B)${isLastChunk ? " [LAST]" : ""}`
+        const sramHex = sramBuffer.toString(16).padStart(8, "0");
+        const chunkHex = chunk.length.toString(16).padStart(8, "0");
+        const flashHex = flashAddr.toString(16).padStart(8, "0");
+        const physicalHex = (flashAddr + 0x4000).toString(16).padStart(8, "0");
+
+        this.log.chunk(
+          chunkNum,
+          numChunks,
+          flashAddr + 0x4000,
+          chunk.length,
+          isLastChunk
+        );
+        this.log.command(
+          `S${sramHex},${chunkHex}#`,
+          `Write ${chunk.length} bytes into bootloader data_buffer[0x${sramHex}]`
         );
 
         // Write to SRAM buffer, then commit to flash
         await bossa.writeBinary(sramBuffer, chunk);
+        this.log.command(
+          `Y${sramHex},00000000#`,
+          "Set copy offset from data_buffer (bootloader uses this as source)"
+        );
+        this.log.command(
+          `Y${flashHex},${chunkHex}#`,
+          `Copy ${chunk.length} bytes from data_buffer to flash @ 0x${physicalHex}`
+        );
         await bossa.writeBuffer(sramBuffer, flashAddr, chunk.length);
 
         flashAddr += chunk.length;
@@ -884,12 +934,10 @@ export class BOSSAStrategy {
         // Wireshark shows 238-261ms between 4KB chunks
         // This allows flash controller to fully commit each page
         if (isLastChunk) {
-          console.log(
-            `[BOSSA] Last chunk written, waiting 1000ms for flash commit...`
-          );
+          this.log.wait(1000, "Final chunk - extended wait for flash commit");
           await new Promise((resolve) => setTimeout(resolve, 1000));
         } else {
-          console.log(`[BOSSA] Waiting 250ms for flash page commit...`);
+          this.log.wait(250, "Inter-chunk delay for flash page commit");
           await new Promise((resolve) => setTimeout(resolve, 250));
         }
       }
@@ -900,25 +948,35 @@ export class BOSSAStrategy {
       // The Y# ACK only means data was received, not necessarily committed to flash
       // Using a generous 10 second wait to ensure flash is fully committed
       const waitTime = 10000;
-      console.log(
-        `[BOSSA] Waiting ${waitTime}ms for flash operations to complete (${numChunks} chunks, ${totalBytes} bytes)...`
+      this.log.section("FLASH COMMIT");
+      this.log.wait(
+        waitTime,
+        `Final flash commit wait (${numChunks} chunks, ${totalBytes} bytes)`
+      );
+      this.log.info(
+        "Y# ACK only means data received - actual flash commit takes longer"
       );
       await new Promise((resolve) => setTimeout(resolve, waitTime));
 
       // Verify bootloader is still responsive by sending N# before reset
-      console.log("[BOSSA] Verifying bootloader is responsive...");
+      this.log.info("Verifying bootloader is still responsive...");
       try {
         await bossa.hello();
-        console.log("[BOSSA] ✅ Bootloader still responsive");
+        this.log.success("Bootloader still responsive after flash write");
       } catch (e) {
-        console.log(
-          "[BOSSA] ⚠️ Bootloader unresponsive after write, proceeding with reset..."
+        this.log.warn(
+          "Bootloader unresponsive after write - proceeding with reset"
         );
       }
 
       if (progressCallback) progressCallback(96, "Finalizing...");
 
-      console.log("[BOSSA] Resetting device to run new firmware...");
+      this.log.section("RESET DEVICE");
+      this.log.info("Sending K# reset command to boot new firmware");
+      this.log.command(
+        "K#",
+        "System reset via NVIC_SystemReset() - boots into user code at 0x4000"
+      );
       if (progressCallback) progressCallback(98, "Resetting...");
 
       // Use K# command (system reset) instead of G# (jump)
@@ -927,7 +985,8 @@ export class BOSSAStrategy {
       await bossa.reset();
 
       if (progressCallback) progressCallback(100, "Complete!");
-      console.log("[BOSSA] Upload successful!");
+      this.log.success("Firmware upload complete!");
+      this.log.info("Device should now be running the new firmware");
     } finally {
       if (bossa) {
         try {

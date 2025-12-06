@@ -2,10 +2,12 @@
  * ESPTool Protocol Implementation (Stub/Basic)
  * Handles SLIP encoding and basic commands for ESP32/ESP8266
  */
+import { UploadLogger } from "../utils/UploadLogger.js";
+
 export class ESPTool {
   constructor(port, logger) {
     this.port = port;
-    this.logger = logger || console.log;
+    this.logger = logger || new UploadLogger("ESPTool").getLogFunction();
     this.reader = null;
     this.writer = null;
     this.SLIP_END = 0xc0;

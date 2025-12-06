@@ -1,7 +1,9 @@
+import { UploadLogger } from "../utils/UploadLogger.js";
+
 export class STK500 {
   constructor(port, logger) {
     this.port = port;
-    this.logger = logger || ((msg) => console.log(`[STK500] ${msg}`));
+    this.logger = logger || new UploadLogger("STK500").getLogFunction();
     this.reader = null;
     this.writer = null;
     this.debug = true;

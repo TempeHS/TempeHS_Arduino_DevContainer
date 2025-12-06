@@ -9,17 +9,24 @@
  * The server uses native tools (bossac, avrdude, etc.) that work reliably.
  */
 
+import { UploadLogger } from "../utils/UploadLogger.js";
+
 export class ServerUploadStrategy {
   constructor() {
     this.name = "Server-Side Upload";
+    this.log = new UploadLogger("Server");
   }
 
   /**
    * Prepare is a no-op for server upload - the server handles everything
    */
   async prepare(port, fqbn) {
-    console.log("[ServerUpload] Prepare called - server will handle reset");
-    // No preparation needed - arduino-cli handles the 1200 baud touch
+    this.log.section("PREPARE: Server-Side Upload");
+    this.log.info("Server-side upload delegates all operations to arduino-cli");
+    this.log.info(
+      "The server handles 1200 baud touch, bootloader entry, and flashing"
+    );
+    this.log.info(`Board FQBN: ${fqbn || "not specified"}`);
   }
 
   /**
@@ -32,28 +39,40 @@ export class ServerUploadStrategy {
    * @param {Object} options - Additional options including sketchPath
    */
   async flash(port, data, progressCallback, fqbn, options = {}) {
-    console.log("[ServerUpload] Starting server-side upload...");
+    this.log.section("FLASH: Server-Side arduino-cli Upload");
 
     if (progressCallback) progressCallback(5, "Preparing server upload...");
 
     // Get the sketch path from options or throw error
     const sketchPath = options.sketchPath;
     if (!sketchPath) {
+      this.log.error("Missing required sketchPath option");
       throw new Error("ServerUploadStrategy requires sketchPath in options");
     }
 
     // Get the port path - this is tricky with Web Serial
-    // We need to get it from the server's perspective
     const portPath = options.portPath;
     if (!portPath) {
+      this.log.error("Missing required portPath option");
+      this.log.info("Use /api/ports to discover available serial ports");
       throw new Error(
         "ServerUploadStrategy requires portPath in options. Use /api/ports to discover available ports."
       );
     }
 
+    this.log.info(`Sketch path: ${sketchPath}`);
+    this.log.info(`Serial port: ${portPath}`);
+    this.log.info(`Board FQBN: ${fqbn}`);
+
     if (progressCallback) progressCallback(10, "Uploading via server...");
 
     try {
+      this.log.info("Sending upload request to server...");
+      this.log.command(
+        "POST /api/upload",
+        `Request arduino-cli to compile and upload sketch to ${portPath}`
+      );
+
       const response = await fetch("/api/upload", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -67,16 +86,24 @@ export class ServerUploadStrategy {
       const result = await response.json();
 
       if (!response.ok || !result.success) {
-        console.error("[ServerUpload] Upload failed:", result);
+        this.log.error("Server upload failed", result.error || result);
         throw new Error(result.error || "Server upload failed");
       }
 
       if (progressCallback) progressCallback(100, "Upload complete!");
-      console.log("[ServerUpload] Upload successful");
+      this.log.success("Server-side upload completed successfully");
+
+      if (result.output) {
+        this.log.info("Server output:");
+        // Log each line so multi-line CLI output stays readable
+        result.output.split("\n").forEach((line) => {
+          if (line.trim()) this.log.info(`  ${line}`);
+        });
+      }
 
       return result;
     } catch (error) {
-      console.error("[ServerUpload] Error:", error);
+      this.log.error("Upload failed", error);
       throw error;
     }
   }

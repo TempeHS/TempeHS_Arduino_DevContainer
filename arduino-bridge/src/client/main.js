@@ -5,24 +5,25 @@ import { PlotterUI } from "./ui/PlotterUI.js";
 
 // Version for cache debugging - update this when making changes
 const CLIENT_VERSION = "1.0.8-longer-delays";
-console.log(
-  `%c[Arduino Bridge Client] Version: ${CLIENT_VERSION}`,
-  "color: #00ff00; font-weight: bold;"
-);
-console.log(`[Arduino Bridge Client] Loaded at: ${new Date().toISOString()}`);
+
+const terminal = new TerminalUI("terminal-container");
+const plotter = new PlotterUI("plotter-container");
+setupConsoleBridge(terminal);
+
+console.info(`[Arduino Bridge Client] Version: ${CLIENT_VERSION}`);
+console.info(`[Arduino Bridge Client] Loaded at: ${new Date().toISOString()}`);
+
+const serialManager = new SerialManager();
+const uploadManager = new UploadManager();
 
 // Fetch and display server version for cache verification
 fetch("/api/version")
   .then((res) => res.json())
   .then((data) => {
-    console.log(
-      `%c[Arduino Bridge Server] Version: ${data.version}`,
-      "color: #00ffff; font-weight: bold;"
-    );
+    console.info(`[Arduino Bridge Server] Version: ${data.version}`);
     if (data.version !== CLIENT_VERSION) {
       console.warn(
-        `%c⚠️ VERSION MISMATCH! Client: ${CLIENT_VERSION}, Server: ${data.version}`,
-        "color: #ff0000; font-weight: bold;"
+        `⚠️ VERSION MISMATCH! Client: ${CLIENT_VERSION}, Server: ${data.version}`
       );
       setBridgeStatus({
         online: false,
@@ -30,19 +31,14 @@ fetch("/api/version")
         detail: `Client ${CLIENT_VERSION}, Server ${data.version}. Restart to resync`,
       });
     } else {
-      console.log(`%c✅ Client and Server versions match`, "color: #00ff00;");
+      console.info("✅ Client and Server versions match");
       setBridgeStatus({ online: true });
     }
   })
   .catch((err) => handleBridgeError("Version check", err));
 
-const serialManager = new SerialManager();
-const uploadManager = new UploadManager();
-const terminal = new TerminalUI("terminal-container");
-const plotter = new PlotterUI("plotter-container");
-
-// Track the last working baud rate for reconnection after upload
-let lastWorkingBaudRate = 9600;
+// Track the last working baud rate for reconnection after upload (115200 default for modern boards)
+let lastWorkingBaudRate = 115200;
 
 // UI Elements
 const bridgeStatusBanner = document.getElementById("bridge-status");
@@ -79,7 +75,99 @@ const bootloaderModal = document.getElementById("bootloaderModal");
 const modalSelectPortBtn = document.getElementById("modalSelectPortBtn");
 const modalCancelBtn = document.getElementById("modalCancelBtn");
 
+// Mismatch Modal Elements
+const mismatchModal = document.getElementById("mismatchModal");
+const mismatchMessage = document.getElementById("mismatchMessage");
+const mismatchConnected = document.getElementById("mismatchConnected");
+const mismatchSelected = document.getElementById("mismatchSelected");
+const mismatchContinueBtn = document.getElementById("mismatchContinueBtn");
+const mismatchCancelBtn = document.getElementById("mismatchCancelBtn");
+
 let isPlotterMode = false;
+
+function setupConsoleBridge(terminalInstance) {
+  if (!terminalInstance || typeof terminalInstance.write !== "function") {
+    return;
+  }
+
+  const original = {
+    log: console.log.bind(console),
+    info: console.info.bind(console),
+    warn: console.warn.bind(console),
+    error: console.error.bind(console),
+    debug: console.debug
+      ? console.debug.bind(console)
+      : console.log.bind(console),
+  };
+
+  const levelStyles = {
+    log: { icon: "ℹ️", color: "\u001b[36m" },
+    info: { icon: "ℹ️", color: "\u001b[36m" },
+    warn: { icon: "⚠️", color: "\u001b[33m" },
+    error: { icon: "❌", color: "\u001b[31m" },
+    debug: { icon: "🐞", color: "\u001b[90m" },
+  };
+
+  const formatArg = (arg) => {
+    if (arg instanceof Error) {
+      return arg.stack || `${arg.name}: ${arg.message}`;
+    }
+    if (typeof arg === "object" && arg !== null) {
+      if (arg instanceof ArrayBuffer) {
+        return `ArrayBuffer(${arg.byteLength})`;
+      }
+      if (ArrayBuffer.isView(arg)) {
+        return `${arg.constructor.name}(${arg.length})`;
+      }
+      try {
+        return JSON.stringify(arg, null, 2);
+      } catch (jsonError) {
+        return String(arg);
+      }
+    }
+    return String(arg);
+  };
+
+  const writeToTerminal = (level, args) => {
+    const style = levelStyles[level] || levelStyles.log;
+    const timestamp = new Date().toISOString().slice(11, 23);
+    const message = args.length
+      ? args.map((arg) => formatArg(arg)).join(" ")
+      : "";
+    if (!message) {
+      return;
+    }
+    const normalized = message.replace(/\r\n|\r|\n/g, "\r\n");
+    terminalInstance.write(
+      `\r\n${style.color}[${timestamp}] ${style.icon} ${normalized}\u001b[0m\r\n`
+    );
+  };
+
+  console.log = (...args) => {
+    writeToTerminal("log", args);
+    original.log(...args);
+  };
+
+  console.info = (...args) => {
+    writeToTerminal("info", args);
+    original.info(...args);
+  };
+
+  console.warn = (...args) => {
+    writeToTerminal("warn", args);
+    original.warn(...args);
+  };
+
+  console.error = (...args) => {
+    writeToTerminal("error", args);
+    original.error(...args);
+  };
+
+  console.debug = (...args) => {
+    writeToTerminal("debug", args);
+    original.debug(...args);
+  };
+}
 
 function setBridgeStatus({ online, message = "", detail = "", busy = false }) {
   if (!bridgeStatusBanner) return;
@@ -328,7 +416,7 @@ async function initialize() {
   // Now try to apply saved configuration
   const savedConfig = await loadBoardConfig();
   if (savedConfig) {
-    console.log("[Board Config] Loaded saved config:", savedConfig);
+    console.info("[Board Config] Loaded saved config:", savedConfig);
 
     // Apply saved board selection
     if (savedConfig.board) {
@@ -337,7 +425,7 @@ async function initialize() {
       );
       if (boardOption) {
         boardSelect.value = savedConfig.board;
-        console.log(`[Board Config] Restored board: ${savedConfig.board}`);
+        console.info(`[Board Config] Restored board: ${savedConfig.board}`);
       }
     }
 
@@ -350,7 +438,7 @@ async function initialize() {
       );
       if (sketchOption) {
         sketchSelect.value = sketchDir;
-        console.log(`[Board Config] Restored sketch: ${sketchDir}`);
+        console.info(`[Board Config] Restored sketch: ${sketchDir}`);
       }
     }
   }
@@ -383,36 +471,17 @@ function updateCompileButtons() {
 
   const uploadMode = getBoardUploadMode();
 
-  console.log(
-    "[updateCompileButtons] Board:",
-    boardSelect.value,
-    "UploadMode:",
-    uploadMode,
-    "Ready:",
-    ready
-  );
-
   compileBtn.disabled = !ready;
 
   if (uploadMode === "uf2-download") {
     // UF2 boards: Change button text and enable without serial connection
     compileUploadBtn.textContent = "Compile & Download (.uf2)";
     compileUploadBtn.disabled = !ready;
-    console.log(
-      "[updateCompileButtons] UF2 mode - button enabled:",
-      !compileUploadBtn.disabled
-    );
   } else {
     // Serial upload boards: Require connection
     compileUploadBtn.textContent = "Compile & Upload";
     const hasPort = !!serialManager.provider.port;
     compileUploadBtn.disabled = !(ready && hasPort);
-    console.log(
-      "[updateCompileButtons] Serial mode - hasPort:",
-      hasPort,
-      "button enabled:",
-      !compileUploadBtn.disabled
-    );
   }
 }
 
@@ -448,7 +517,7 @@ sketchSelect.addEventListener("change", async (e) => {
         body: JSON.stringify(payload),
       });
       if (response.ok) {
-        console.log(
+        console.info(
           `[Board Config] Updated VS Code config: board=${fqbn}, sketch=${payload.sketch}`
         );
       }
@@ -484,7 +553,7 @@ boardSelect.addEventListener("change", async () => {
         body: JSON.stringify(payload),
       });
       if (response.ok) {
-        console.log(`[Board Config] Updated VS Code config to: ${fqbn}`);
+        console.info(`[Board Config] Updated VS Code config to: ${fqbn}`);
       } else {
         console.warn("[Board Config] Failed to update VS Code config");
       }
@@ -522,7 +591,7 @@ async function compileSketch() {
   const sketchPath = sketchSelect.value;
   const fqbn = boardSelect.value;
 
-  console.log(
+  console.info(
     `[Client] Compiling sketch: '${sketchPath}' for board: '${fqbn}'`
   );
   terminal.write(`\r\n[Debug] Selected Sketch: ${sketchPath}\r\n`);
@@ -621,10 +690,15 @@ async function handleUpload(port, firmwareData, fqbn) {
       updateCompileButtons();
       serialInput.disabled = false;
       sendBtn.disabled = false;
+
+      // Resume serial monitor after successful upload
+      serialManager.resume();
       terminal.write("Serial monitor reconnected.\r\n");
     } catch (e) {
       console.error("Reconnect failed:", e);
       terminal.write("\r\nReconnect failed. Please connect manually.\r\n");
+      // Resume serial monitor even on reconnect failure
+      serialManager.resume();
       // Reset UI to disconnected state
       connectBtn.disabled = false;
       disconnectBtn.disabled = true;
@@ -704,10 +778,13 @@ async function handleUpload(port, firmwareData, fqbn) {
                 handshakeError
               );
             }
+            // Resume serial monitor after successful bootloader reconnect
+            serialManager.resume();
           } catch (e) {
             terminal.write(
               "\r\nDevice rebooted. Please reconnect manually.\r\n"
             );
+            serialManager.resume();
             connectBtn.disabled = false;
             disconnectBtn.disabled = true;
             baudSelect.disabled = false;
@@ -716,6 +793,7 @@ async function handleUpload(port, firmwareData, fqbn) {
         } catch (e) {
           console.error("Bootloader flash failed:", e);
           terminal.write(`\r\nBootloader flash failed: ${e.message}\r\n`);
+          serialManager.resume();
           connectBtn.disabled = false;
           disconnectBtn.disabled = true;
           baudSelect.disabled = false;
@@ -727,6 +805,7 @@ async function handleUpload(port, firmwareData, fqbn) {
         bootloaderModal.style.display = "none";
         cleanupBootloader();
         terminal.write("\r\nUpload Cancelled.\r\n");
+        serialManager.resume();
         connectBtn.disabled = false;
         disconnectBtn.disabled = true;
         baudSelect.disabled = false;
@@ -762,6 +841,7 @@ async function handleUpload(port, firmwareData, fqbn) {
           await handleUpload(newPort, firmwareData, fqbn);
         } catch (e) {
           terminal.write("\r\nUpload Cancelled.\r\n");
+          serialManager.resume();
           // Reset UI
           connectBtn.disabled = false;
           disconnectBtn.disabled = true;
@@ -774,6 +854,7 @@ async function handleUpload(port, firmwareData, fqbn) {
         bootloaderModal.style.display = "none";
         cleanup();
         terminal.write("\r\nUpload Cancelled.\r\n");
+        serialManager.resume();
         // Reset UI
         connectBtn.disabled = false;
         disconnectBtn.disabled = true;
@@ -825,8 +906,11 @@ async function handleUpload(port, firmwareData, fqbn) {
           handshakeError
         );
       }
+      // Resume serial monitor after error recovery
+      serialManager.resume();
     } catch (e) {
       console.error("Recovery reconnect failed:", e);
+      serialManager.resume();
       // Reset UI to disconnected state
       connectBtn.disabled = false;
       disconnectBtn.disabled = true;
@@ -910,13 +994,28 @@ compileUploadBtn.addEventListener("click", async () => {
   // Capture port immediately to ensure we have it even if disconnected during compile
   const savedPort = serialManager.provider.port;
 
+  // Check for board mismatch before starting upload
+  const shouldProceed = await checkBoardMismatch(savedPort, fqbn);
+  if (!shouldProceed) {
+    return; // User cancelled due to mismatch
+  }
+
+  // Pause serial monitor during compile/upload to avoid garbled output
+  serialManager.pause();
+  terminal.write("\r\n[Serial Monitor paused during compile/upload]\r\n");
+
   // All uploads use client-side Web Serial (BOSSA, AVR, ESP32, etc.)
   // Note: Server-side upload was attempted but doesn't work in GitHub Codespaces
   // since the Arduino is connected to the user's browser, not the server.
 
   // 1. Compile
   const artifactUrl = await compileSketch();
-  if (!artifactUrl) return;
+  if (!artifactUrl) {
+    // Resume on compile failure
+    serialManager.resume();
+    terminal.write("[Serial Monitor resumed]\r\n");
+    return;
+  }
 
   terminal.write(`\r\n[Debug] Artifact URL: ${artifactUrl}\r\n`);
 
@@ -942,10 +1041,110 @@ compileUploadBtn.addEventListener("click", async () => {
 
 // Get default baud rate for a board (used when user hasn't selected a baud)
 function getDefaultBaudRate(fqbn) {
-  // ESP32 boards often use 115200
-  if (fqbn && fqbn.includes("esp32")) return 115200;
-  // Most Arduino boards default to 9600
-  return 9600;
+  // Legacy AVR boards (Uno, Mega, Nano) traditionally used 9600
+  // but 115200 is fine for them too and more responsive
+  // Only return 9600 for very old/slow boards if needed
+  return 115200;
+}
+
+/**
+ * Check if the connected port's VID/PID matches the selected board.
+ * Returns a promise that resolves to true if upload should proceed,
+ * false if user cancelled.
+ * @param {SerialPort} port - The connected serial port
+ * @param {string} fqbn - The selected board FQBN
+ * @returns {Promise<boolean>} - true if upload should proceed
+ */
+function checkBoardMismatch(port, fqbn) {
+  return new Promise((resolve) => {
+    if (!port) {
+      resolve(true); // No port, let upload handle the error
+      return;
+    }
+
+    const portInfo = port.getInfo();
+    const selectedBoard = availableBoards.find((b) => b.fqbn === fqbn);
+
+    // If no VID/PID info or no board metadata, skip check
+    if (!portInfo.usbVendorId || !portInfo.usbProductId || !selectedBoard) {
+      resolve(true);
+      return;
+    }
+
+    // If board has no VID/PID metadata, skip check
+    if (!selectedBoard.vid || !selectedBoard.pid) {
+      resolve(true);
+      return;
+    }
+
+    // Check if connected VID/PID matches any of the board's known VID/PIDs
+    const vidMatch = selectedBoard.vid.some(
+      (v) => parseInt(v) === portInfo.usbVendorId
+    );
+    const pidMatch = selectedBoard.pid.some(
+      (p) => parseInt(p) === portInfo.usbProductId
+    );
+
+    if (vidMatch && pidMatch) {
+      resolve(true); // Match found, proceed
+      return;
+    }
+
+    // Mismatch detected - try to find what board IS connected
+    const connectedBoard = availableBoards.find((b) => {
+      if (!b.vid || !b.pid) return false;
+      const vMatch = b.vid.some((v) => parseInt(v) === portInfo.usbVendorId);
+      const pMatch = b.pid.some((p) => parseInt(p) === portInfo.usbProductId);
+      return vMatch && pMatch;
+    });
+
+    // Format VID/PID for display
+    const vidHex = portInfo.usbVendorId
+      .toString(16)
+      .toUpperCase()
+      .padStart(4, "0");
+    const pidHex = portInfo.usbProductId
+      .toString(16)
+      .toUpperCase()
+      .padStart(4, "0");
+    const connectedLabel = connectedBoard
+      ? connectedBoard.name
+      : `Unknown device (VID:${vidHex}, PID:${pidHex})`;
+
+    // Update modal content
+    mismatchConnected.textContent = connectedLabel;
+    mismatchSelected.textContent = selectedBoard.name;
+
+    // Show modal
+    mismatchModal.style.display = "flex";
+
+    const handleContinue = () => {
+      mismatchModal.style.display = "none";
+      cleanup();
+      console.warn(
+        `[Board Mismatch] User chose to proceed with upload despite mismatch.` +
+          ` Connected: ${connectedLabel}, Selected: ${selectedBoard.name}`
+      );
+      resolve(true);
+    };
+
+    const handleCancel = () => {
+      mismatchModal.style.display = "none";
+      cleanup();
+      terminal.write(
+        "\r\n\x1b[1;33mUpload cancelled due to board mismatch.\x1b[0m\r\n"
+      );
+      resolve(false);
+    };
+
+    const cleanup = () => {
+      mismatchContinueBtn.removeEventListener("click", handleContinue);
+      mismatchCancelBtn.removeEventListener("click", handleCancel);
+    };
+
+    mismatchContinueBtn.addEventListener("click", handleContinue);
+    mismatchCancelBtn.addEventListener("click", handleCancel);
+  });
 }
 
 // Connect Button Handler

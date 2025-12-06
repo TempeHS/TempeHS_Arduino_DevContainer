@@ -54,12 +54,12 @@
             <option value="1200">1200</option>
             <option value="2400">2400</option>
             <option value="4800">4800</option>
-            <option value="9600" selected>9600</option>
+            <option value="9600">9600</option>
             <option value="19200">19200</option>
             <option value="38400">38400</option>
             <option value="57600">57600</option>
             <option value="74880">74880</option>
-            <option value="115200">115200</option>
+            <option value="115200" selected>115200</option>
             <option value="230400">230400</option>
             <option value="250000">250000</option>
             <option value="500000">500000</option>
@@ -198,6 +198,78 @@
           </button>
           <button
             id="modalCancelBtn"
+            style="
+              background: #3c3c3c;
+              color: white;
+              border: none;
+              padding: 8px 16px;
+              cursor: pointer;
+              margin-left: 10px;
+              border-radius: 2px;
+            "
+          >
+            Cancel
+          </button>
+        </div>
+      </div>
+    </div>
+
+    <!-- Board Mismatch Warning Modal -->
+    <div
+      id="mismatchModal"
+      style="
+        display: none;
+        position: fixed;
+        top: 0;
+        left: 0;
+        width: 100%;
+        height: 100%;
+        background: rgba(0, 0, 0, 0.7);
+        z-index: 1000;
+        justify-content: center;
+        align-items: center;
+      "
+    >
+      <div
+        style="
+          background: #252526;
+          padding: 20px;
+          border-radius: 5px;
+          border: 1px solid #f59e0b;
+          max-width: 450px;
+          text-align: center;
+          color: #cccccc;
+          font-family: 'Segoe UI', sans-serif;
+        "
+      >
+        <h3 style="margin-top: 0; color: #f59e0b">⚠️ Board Mismatch Warning</h3>
+        <p id="mismatchMessage">
+          The connected device does not appear to match the selected board.
+        </p>
+        <p style="font-size: 12px; color: #888">
+          Connected: <span id="mismatchConnected">Unknown</span><br />
+          Selected: <span id="mismatchSelected">Unknown</span>
+        </p>
+        <p style="font-size: 13px; color: #aaa">
+          Uploading to the wrong board type may fail or damage the device.
+        </p>
+        <div style="margin-top: 20px">
+          <button
+            id="mismatchContinueBtn"
+            style="
+              background: #f59e0b;
+              color: black;
+              border: none;
+              padding: 8px 16px;
+              cursor: pointer;
+              border-radius: 2px;
+              font-weight: bold;
+            "
+          >
+            Upload Anyway
+          </button>
+          <button
+            id="mismatchCancelBtn"
             style="
               background: #3c3c3c;
               color: white;

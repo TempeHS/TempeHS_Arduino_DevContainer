@@ -1,3 +1,7 @@
+import { UploadLogger } from "../services/utils/UploadLogger.js";
+
+const serialLogger = new UploadLogger("Serial");
+
 export class WebSerialProvider {
   constructor() {
     this.port = null;
@@ -16,17 +20,17 @@ export class WebSerialProvider {
 
       // Check if port is already open, close it first
       if (this.port.readable || this.port.writable) {
-        console.log("[WebSerialProvider] Port already open, closing first...");
+        serialLogger.warn("Port already open, closing before reconnect");
         try {
           await this.port.close();
         } catch (e) {
-          console.warn("[WebSerialProvider] Error closing port:", e);
+          serialLogger.warn("Error closing existing port", e);
         }
         // Small delay to let the port fully close
         await new Promise((r) => setTimeout(r, 100));
       }
 
-      console.log(`[WebSerialProvider] Opening port at ${baudRate} baud...`);
+      serialLogger.info(`Opening port at ${baudRate} baud...`);
       await this.port.open({ baudRate });
 
       // Native USB boards (e.g., Uno R4) buffer output until DTR is asserted.
@@ -37,18 +41,15 @@ export class WebSerialProvider {
           requestToSend: true,
         });
       } catch (signalError) {
-        console.warn(
-          "[WebSerialProvider] Unable to set control signals:",
-          signalError
-        );
+        serialLogger.warn("Unable to assert control signals", signalError);
       }
-      console.log("[WebSerialProvider] Port opened, starting read loop...");
+      serialLogger.success("Port opened - starting read loop");
 
       this.keepReading = true;
       this.readLoop();
       return true;
     } catch (error) {
-      console.error("Error connecting to serial port:", error);
+      serialLogger.error("Error connecting to serial port", error);
       throw error;
     }
   }
@@ -68,10 +69,7 @@ export class WebSerialProvider {
           requestToSend: false,
         });
       } catch (signalError) {
-        console.warn(
-          "[WebSerialProvider] Unable to clear control signals:",
-          signalError
-        );
+        serialLogger.warn("Unable to clear control signals", signalError);
       }
       await this.port.close();
     }
@@ -93,21 +91,79 @@ export class WebSerialProvider {
     await this.port.setSignals(signals);
   }
 
+  /**
+   * Close and reopen the port at a new baud rate without losing the port reference.
+   * Used for baud rate detection/scanning.
+   * @param {number} baudRate - New baud rate to open at
+   * @returns {Promise<boolean>} - true if successful
+   */
+  async reopenAtBaud(baudRate) {
+    if (!this.port) {
+      serialLogger.error("Cannot reopen - no port connected");
+      return false;
+    }
+
+    try {
+      // Stop reading
+      this.keepReading = false;
+      if (this.reader) {
+        await this.reader.cancel().catch(() => {});
+        this.reader = null;
+      }
+
+      // Close the port
+      try {
+        await this.port.close();
+      } catch (e) {
+        serialLogger.warn("Error closing port during reopen", e);
+      }
+
+      // Small delay to let the port fully close
+      await new Promise((r) => setTimeout(r, 100));
+
+      // Reopen at new baud rate
+      serialLogger.info(`Reopening port at ${baudRate} baud...`);
+      await this.port.open({ baudRate });
+
+      // Reassert DTR/RTS
+      try {
+        await this.port.setSignals({
+          dataTerminalReady: true,
+          requestToSend: true,
+        });
+      } catch (signalError) {
+        serialLogger.warn(
+          "Unable to assert control signals after reopen",
+          signalError
+        );
+      }
+
+      serialLogger.success(`Port reopened at ${baudRate} baud`);
+
+      // Restart read loop
+      this.keepReading = true;
+      this.readLoop();
+
+      return true;
+    } catch (error) {
+      serialLogger.error(`Failed to reopen at ${baudRate} baud`, error);
+      return false;
+    }
+  }
+
   async readLoop() {
-    console.log(
-      "[WebSerialProvider] readLoop started, keepReading:",
-      this.keepReading
-    );
-    console.log("[WebSerialProvider] port.readable:", this.port?.readable);
+    serialLogger.info("Serial read loop started", {
+      keepReading: this.keepReading,
+      hasReadable: !!this.port?.readable,
+    });
 
     while (this.port && this.port.readable && this.keepReading) {
-      console.log("[WebSerialProvider] Getting reader...");
       this.reader = this.port.readable.getReader();
       try {
         while (true) {
           const { value, done } = await this.reader.read();
           if (done) {
-            console.log("[WebSerialProvider] Reader done signal received");
+            serialLogger.info("Serial reader signaled completion");
             break;
           }
           if (value) {
@@ -116,23 +172,17 @@ export class WebSerialProvider {
           }
         }
       } catch (error) {
-        console.error(
-          "[WebSerialProvider] Error reading from serial port:",
-          error
-        );
+        serialLogger.error("Error reading from serial port", error);
       } finally {
-        console.log("[WebSerialProvider] Releasing reader lock");
         this.reader.releaseLock();
+        serialLogger.info("Serial reader released lock");
       }
     }
-    console.log(
-      "[WebSerialProvider] readLoop exited. port:",
-      !!this.port,
-      "readable:",
-      this.port?.readable,
-      "keepReading:",
-      this.keepReading
-    );
+    serialLogger.info("Serial read loop stopped", {
+      hasPort: !!this.port,
+      hasReadable: !!this.port?.readable,
+      keepReading: this.keepReading,
+    });
   }
 
   on(event, callback) {
