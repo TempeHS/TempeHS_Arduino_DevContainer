@@ -1,4 +1,4 @@
-import { ESPTool } from "../protocols/ESPTool.js";
+import { ESPToolProtocol } from "../protocols/ESPTool.js";
 import { UploadLogger } from "../utils/UploadLogger.js";
 
 export class ESPToolStrategy {
@@ -60,7 +60,7 @@ export class ESPToolStrategy {
     );
     this.log.info("Using SLIP-encoded serial protocol for ESP ROM bootloader");
 
-    const esptool = new ESPTool(port, this.log.getLogFunction());
+    const esptool = new ESPToolProtocol(port, this.log.getLogFunction());
 
     try {
       this.log.info("Connecting to ESP bootloader streams");

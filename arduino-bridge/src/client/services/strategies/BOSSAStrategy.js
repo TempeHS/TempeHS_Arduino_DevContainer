@@ -1,24 +1,13 @@
 /**
- * BOSSAStrategy v1.0.9-padded-firmware
- * - Added 250ms delay between chunks with logging
- * - 10 second post-write wait
- */
-import { Bossa } from "../protocols/Bossa.js";
-import {
-  BOSSA_RENESAS_CONFIG,
-  getProtocolConfig,
-  getChunkSize,
-} from "../../config/boardProtocols.js";
-import { UploadLogger } from "../utils/UploadLogger.js";
-
-/**
- * BOSSA Upload Strategy using SAM-BA Protocol
+ * BOSSA Upload Strategy
  *
- * This strategy handles firmware uploads to boards using the BOSSA/SAM-BA protocol via Web Serial API.
- * Supports: Arduino R4 WiFi, R4 Minima, Nano R4, and other Renesas/SAMD boards.
+ * Upload strategy for Renesas/SAMD-based Arduino boards using SAM-BA protocol:
+ * - Arduino Uno R4 WiFi
+ * - Arduino Uno R4 Minima
+ * - Arduino Nano R4
+ * - Other Renesas RA4M1 and SAMD-based boards
  *
- * CONFIGURATION: All protocol parameters are loaded from boardProtocols.js
- * which is the SINGLE SOURCE OF TRUTH matching the YAML protocol files.
+ * Uses 1200 baud touch sequence to enter bootloader mode.
  *
  * BOOTLOADER ENTRY: Works reliably via 1200 baud touch
  * =======================================================
@@ -39,13 +28,39 @@ import { UploadLogger } from "../utils/UploadLogger.js";
  * @see config/boardProtocols.js - Protocol configuration
  * @see protocols/bossa-renesas.yaml - YAML definition
  * @see https://github.com/arduino/arduino-renesas-bootloader/blob/main/src/bossa.c
+ *
+ * @module client/services/strategies/BOSSAStrategy
+ */
+
+import { BossaProtocol } from "../protocols/Bossa.js";
+import {
+  BOSSA_RENESAS_CONFIG,
+  getProtocolConfig,
+  getChunkSize,
+} from "../../config/boardProtocols.js";
+import { UploadLogger } from "../utils/UploadLogger.js";
+
+// =============================================================================
+// BOSSAStrategy Class
+// =============================================================================
+
+/**
+ * Upload strategy for BOSSA/SAM-BA protocol boards
+ * @implements {UploadStrategy}
  */
 export class BOSSAStrategy {
+  /**
+   * Create a new BOSSAStrategy instance
+   */
   constructor() {
+    /** @type {string} Human-readable strategy name */
     this.name = "BOSSA/SAM-BA";
+
+    /** @type {UploadLogger} Logger instance */
     this.log = new UploadLogger("BOSSA");
 
     // Load configuration from centralized config (matches YAML protocol files)
+    /** @type {Object} Protocol configuration */
     this.config = BOSSA_RENESAS_CONFIG;
 
     // Serial configuration from config
@@ -164,7 +179,7 @@ export class BOSSAStrategy {
       await port.setSignals({ dataTerminalReady: true, requestToSend: true });
       await new Promise((r) => setTimeout(r, 50));
 
-      const bossa = new Bossa(port);
+      const bossa = new BossaProtocol(port);
       await bossa.connect();
 
       // Send N# to trigger response
@@ -538,7 +553,7 @@ export class BOSSAStrategy {
       this.log.wait(110, "Match USB capture timing before sending N#");
       await new Promise((r) => setTimeout(r, 110));
 
-      bossa = new Bossa(port);
+      bossa = new BossaProtocol(port);
       await bossa.connect();
 
       // Send N# to verify bootloader is responding
@@ -583,7 +598,7 @@ export class BOSSAStrategy {
           });
           await new Promise((r) => setTimeout(r, 100));
 
-          bossa = new Bossa(port);
+          bossa = new BossaProtocol(port);
           await bossa.connect();
 
           this.log.command("N#", "Query bootloader at this baud rate");
@@ -636,7 +651,7 @@ export class BOSSAStrategy {
         await port.setSignals({ dataTerminalReady: true, requestToSend: true });
         await new Promise((r) => setTimeout(r, 100));
 
-        bossa = new Bossa(port);
+        bossa = new BossaProtocol(port);
         await bossa.connect();
 
         this.log.command("N#", "Retry bootloader query after manual reset");

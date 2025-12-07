@@ -4,7 +4,7 @@ import { UploadLogger } from "../utils/UploadLogger.js";
  * BOSSA Protocol Implementation for Arduino R4 WiFi
  * Version: 1.2.0-minimal-logging
  */
-export class Bossa {
+export class BossaProtocol {
   constructor(port, logger = null) {
     this.port = port;
     this.reader = null;

@@ -1,3 +1,8 @@
+import { Logger } from "../../shared/Logger.js";
+
+/** @type {Logger} */
+const logger = new Logger("WebUSB");
+
 export class WebUSBProvider {
   constructor() {
     this.device = null;
@@ -11,7 +16,7 @@ export class WebUSBProvider {
       this.device = await navigator.usb.requestDevice({ filters });
       return this.device;
     } catch (error) {
-      console.error("Error requesting USB device:", error);
+      logger.error("Error requesting USB device", error);
       throw error;
     }
   }
@@ -50,7 +55,7 @@ export class WebUSBProvider {
     if (!foundInterface) {
       // Fallback to interface 0 if no bulk endpoints found (might be control transfer only?)
       this.interfaceNumber = 0;
-      console.warn("No bulk endpoints found. Defaulting to Interface 0.");
+      logger.warn("No bulk endpoints found. Defaulting to Interface 0.");
     }
 
     await this.device.claimInterface(this.interfaceNumber);

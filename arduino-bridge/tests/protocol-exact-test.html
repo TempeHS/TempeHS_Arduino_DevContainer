@@ -92,7 +92,7 @@
     <div id="output">Click "Run EXACT Protocol Test" to start...</div>
 
     <script type="module">
-      import { Bossa } from "../src/client/services/protocols/Bossa.js";
+      import { BossaProtocol } from "../src/client/services/protocols/Bossa.js";
       import { BOSSA_RENESAS } from "../src/client/config/boardProtocols.js";
 
       function log(msg, cls = "") {
@@ -365,7 +365,7 @@
         log("─".repeat(80));
 
         const mockPort = new ExactMockPort();
-        const bossa = new Bossa(mockPort);
+        const bossa = new BossaProtocol(mockPort);
 
         try {
           await mockPort.open();

@@ -223,7 +223,7 @@
     </div>
 
     <script type="module">
-      import { Bossa } from "../src/client/services/protocols/Bossa.js";
+      import { BossaProtocol } from "../src/client/services/protocols/Bossa.js";
       import { MockSerialPort } from "./browser-trace-test.js";
       import { BOSSA_RENESAS } from "../src/client/config/boardProtocols.js";
 
@@ -312,7 +312,7 @@
         });
 
         try {
-          const bossa = new Bossa(mockPort);
+          const bossa = new BossaProtocol(mockPort);
           await mockPort.open({ baudRate: 230400 });
           await bossa.connect();
 

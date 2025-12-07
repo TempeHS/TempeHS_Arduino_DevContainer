@@ -9,7 +9,7 @@
  *   await runProtocolTest();
  */
 
-import { Bossa } from "../src/client/services/protocols/Bossa.js";
+import { BossaProtocol } from "../src/client/services/protocols/Bossa.js";
 import { BOSSA_RENESAS } from "../src/client/config/boardProtocols.js";
 
 // ============================================================================
@@ -540,7 +540,7 @@ export async function runProtocolTest(
   const mockPort = new MockSerialPort({ name: "Bossa.js Test", verbose });
 
   try {
-    const bossa = new Bossa(mockPort);
+    const bossa = new BossaProtocol(mockPort);
 
     // Open and connect
     await mockPort.open({ baudRate: 230400 });

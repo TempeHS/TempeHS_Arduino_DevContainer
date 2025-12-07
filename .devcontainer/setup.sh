@@ -31,9 +31,10 @@ if [ -d "arduino-bridge" ]; then
     cd ..
 fi
 
-# Patch the Arduino extension (if installed) - this needs to run before extension loads
-# The patch fixes URL construction for Codespaces port forwarding
-echo "Attempting to patch Arduino extension for Codespaces compatibility..."
-python3 scripts/patch-provider.py || echo "Patch skipped (extension not yet installed)"
+# Generate IntelliSense configuration for default board (Uno R4 WiFi)
+echo "Generating IntelliSense configuration..."
+if [ -f "arduino-bridge/scripts/generate-intellisense.sh" ]; then
+    bash arduino-bridge/scripts/generate-intellisense.sh arduino:renesas_uno:unor4wifi
+fi
 
 echo "Arduino development environment setup complete!"

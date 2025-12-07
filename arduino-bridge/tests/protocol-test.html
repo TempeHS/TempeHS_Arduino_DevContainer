@@ -285,7 +285,7 @@
     </div>
 
     <script type="module">
-      import { Bossa } from "../src/client/services/protocols/Bossa.js";
+      import { BossaProtocol } from "../src/client/services/protocols/Bossa.js";
       import {
         MockSerialPort,
         generateReferenceTrace,
@@ -326,7 +326,7 @@
             verbose: false,
           });
 
-          const bossa = new Bossa(mockPort);
+          const bossa = new BossaProtocol(mockPort);
           await mockPort.open({ baudRate: 230400 });
           await bossa.connect();
 

@@ -1,29 +1,281 @@
+/**
+ * Arduino Bridge Client
+ *
+ * Main client application that provides:
+ * - Serial monitor and plotter functionality
+ * - Board and library management UI
+ * - Compile and upload workflow
+ * - WebSerial API integration
+ * - Global error handling and resilience
+ *
+ * @module client/main
+ * @version 1.0.15
+ */
+
 import { SerialManager } from "./services/SerialManager.js";
 import { TerminalUI } from "./ui/TerminalUI.js";
 import { UploadManager } from "./services/UploadManager.js";
 import { PlotterUI } from "./ui/PlotterUI.js";
+import { BoardManagerUI } from "./ui/BoardManagerUI.js";
+import { LibraryManagerUI } from "./ui/LibraryManagerUI.js";
+import { ReferenceUI } from "./ui/ReferenceUI.js";
+import { Logger } from "../shared/Logger.js";
 
-// Version for cache debugging - update this when making changes
-const CLIENT_VERSION = "1.0.8-longer-delays";
+// =============================================================================
+// Constants
+// =============================================================================
+
+/** @type {Logger} Client-side logger for structured logging */
+const logger = new Logger("Client");
+
+/** Client version for cache debugging - update when making changes */
+const CLIENT_VERSION = "1.0.15";
+
+/** Default baud rate for serial connections */
+const DEFAULT_BAUD_RATE = 115200;
+
+/** Health check polling interval in milliseconds */
+const HEALTH_CHECK_INTERVAL_MS = 30000;
+
+/** Reconnection delay after port disconnect */
+const RECONNECT_DELAY_MS = 2000;
+
+/** Maximum reconnection attempts */
+const MAX_RECONNECT_ATTEMPTS = 3;
+
+// =============================================================================
+// Global Error Handlers
+// =============================================================================
+
+/** @type {boolean} Track server online status */
+let serverOnline = true;
+
+/** @type {number|null} Health check interval ID */
+let healthCheckInterval = null;
+
+/**
+ * Global error handler for uncaught exceptions
+ * Logs error and attempts graceful recovery
+ */
+window.onerror = (message, source, lineno, colno, error) => {
+  logger.error(`Global Error: ${message}`, { source, lineno, colno, error });
+  handleGlobalError(error || new Error(message));
+  return true; // Prevent default error handling
+};
+
+/**
+ * Global handler for unhandled promise rejections
+ */
+window.onunhandledrejection = (event) => {
+  logger.error("Unhandled Rejection", event.reason);
+  handleGlobalError(event.reason);
+  event.preventDefault();
+};
+
+/**
+ * Handle global errors with graceful recovery
+ * @param {Error|*} error - The error that occurred
+ */
+async function handleGlobalError(error) {
+  const errorMessage = error instanceof Error ? error.message : String(error);
+
+  // Show error to user via terminal if available
+  if (typeof terminal !== "undefined" && terminal.write) {
+    terminal.write(`\r\n\x1b[1;31m[Error] ${errorMessage}\x1b[0m\r\n`);
+  }
+
+  // Attempt graceful recovery - disconnect port if connected
+  try {
+    if (typeof serialManager !== "undefined" && serialManager.provider?.port) {
+      logger.info("Attempting graceful disconnect after error");
+      await serialManager.disconnect().catch(() => {});
+    }
+  } catch (recoveryError) {
+    logger.warn("Disconnect failed", recoveryError);
+  }
+
+  // Reset UI state
+  updateConnectionUIState(false);
+}
+
+/**
+ * Update connection UI elements to reflect connection state
+ * @param {boolean} connected - Whether serial is connected
+ */
+function updateConnectionUIState(connected) {
+  const connectBtn = document.getElementById("connectBtn");
+  const disconnectBtn = document.getElementById("disconnectBtn");
+  const serialInput = document.getElementById("serialInput");
+  const sendBtn = document.getElementById("sendBtn");
+
+  if (connectBtn) connectBtn.disabled = connected;
+  if (disconnectBtn) disconnectBtn.disabled = !connected;
+  if (serialInput) serialInput.disabled = !connected;
+  if (sendBtn) sendBtn.disabled = !connected;
+}
+
+// =============================================================================
+// Server Health Monitoring
+// =============================================================================
+
+/**
+ * Start periodic server health monitoring
+ */
+function startHealthMonitoring() {
+  if (healthCheckInterval) {
+    clearInterval(healthCheckInterval);
+  }
+  healthCheckInterval = setInterval(
+    checkServerHealth,
+    HEALTH_CHECK_INTERVAL_MS
+  );
+  logger.info("Started server health monitoring");
+}
+
+/**
+ * Check server health and update UI
+ */
+async function checkServerHealth() {
+  try {
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), 5000);
+
+    const response = await fetch("/api/health", {
+      method: "GET",
+      signal: controller.signal,
+    });
+
+    clearTimeout(timeoutId);
+
+    if (response.ok) {
+      const data = await response.json();
+
+      if (!serverOnline) {
+        logger.info("Server back online", data.data);
+        serverOnline = true;
+        hideBridgeOfflineBanner();
+      }
+    } else {
+      throw new Error(`Health check failed: HTTP ${response.status}`);
+    }
+  } catch (error) {
+    if (serverOnline) {
+      logger.error("Server offline", error.message);
+      serverOnline = false;
+      showBridgeOfflineBanner();
+    }
+  }
+}
+
+/**
+ * Show banner indicating bridge server is offline
+ */
+function showBridgeOfflineBanner() {
+  let banner = document.getElementById("health-offline-banner");
+
+  if (!banner) {
+    banner = document.createElement("div");
+    banner.id = "health-offline-banner";
+    banner.style.cssText = `
+      position: fixed;
+      top: 0;
+      left: 0;
+      right: 0;
+      background: #ff6b6b;
+      color: white;
+      padding: 8px 16px;
+      text-align: center;
+      font-weight: bold;
+      z-index: 10000;
+      display: flex;
+      justify-content: center;
+      align-items: center;
+      gap: 8px;
+    `;
+    banner.innerHTML = `
+      <span>⚠️ Arduino Bridge is offline - some features unavailable</span>
+      <button id="retryHealthBtn" style="
+        background: white;
+        color: #ff6b6b;
+        border: none;
+        padding: 4px 12px;
+        border-radius: 4px;
+        cursor: pointer;
+        font-weight: bold;
+      ">Retry</button>
+    `;
+    document.body.prepend(banner);
+
+    document
+      .getElementById("retryHealthBtn")
+      ?.addEventListener("click", async () => {
+        await checkServerHealth();
+      });
+  }
+
+  banner.style.display = "flex";
+}
+
+/**
+ * Hide the bridge offline banner
+ */
+function hideBridgeOfflineBanner() {
+  const banner = document.getElementById("health-offline-banner");
+  if (banner) {
+    banner.style.display = "none";
+  }
+}
+
+// Start health monitoring on load
+startHealthMonitoring();
+
+// =============================================================================
+// UI Component Initialization
+// =============================================================================
 
 const terminal = new TerminalUI("terminal-container");
 const plotter = new PlotterUI("plotter-container");
+const boardManager = new BoardManagerUI("boards-view");
+const libraryManager = new LibraryManagerUI("libraries-view");
+const referenceUI = new ReferenceUI("reference-view");
+
 setupConsoleBridge(terminal);
 
-console.info(`[Arduino Bridge Client] Version: ${CLIENT_VERSION}`);
-console.info(`[Arduino Bridge Client] Loaded at: ${new Date().toISOString()}`);
+logger.info(`Version: ${CLIENT_VERSION}`);
+logger.info(`Loaded at: ${new Date().toISOString()}`);
 
 const serialManager = new SerialManager();
 const uploadManager = new UploadManager();
 
+// Initialize manager UIs
+boardManager.init();
+libraryManager.init();
+referenceUI.init();
+
+// Set up main navigation view switching
+setupNavigation();
+
+// =============================================================================
+// Version Verification
+// =============================================================================
+
 // Fetch and display server version for cache verification
-fetch("/api/version")
-  .then((res) => res.json())
-  .then((data) => {
-    console.info(`[Arduino Bridge Server] Version: ${data.version}`);
+verifyServerVersion();
+
+/**
+ * Verify server version matches client version
+ * Shows warning banner if versions mismatch
+ */
+async function verifyServerVersion() {
+  try {
+    const response = await fetch("/api/version");
+    const data = await response.json();
+
+    logger.info(`Server Version: ${data.version}`);
+
     if (data.version !== CLIENT_VERSION) {
-      console.warn(
-        `⚠️ VERSION MISMATCH! Client: ${CLIENT_VERSION}, Server: ${data.version}`
+      logger.warn(
+        `VERSION MISMATCH! Client: ${CLIENT_VERSION}, Server: ${data.version}`
       );
       setBridgeStatus({
         online: false,
@@ -31,14 +283,20 @@ fetch("/api/version")
         detail: `Client ${CLIENT_VERSION}, Server ${data.version}. Restart to resync`,
       });
     } else {
-      console.info("✅ Client and Server versions match");
+      logger.info("Client and Server versions match");
       setBridgeStatus({ online: true });
     }
-  })
-  .catch((err) => handleBridgeError("Version check", err));
+  } catch (error) {
+    handleBridgeError("Version check", error);
+  }
+}
 
-// Track the last working baud rate for reconnection after upload (115200 default for modern boards)
-let lastWorkingBaudRate = 115200;
+// =============================================================================
+// State
+// =============================================================================
+
+/** Track the last working baud rate for reconnection after upload */
+let lastWorkingBaudRate = DEFAULT_BAUD_RATE;
 
 // UI Elements
 const bridgeStatusBanner = document.getElementById("bridge-status");
@@ -50,6 +308,7 @@ const disconnectBtn = document.getElementById("disconnectBtn");
 const baudSelect = document.getElementById("baudRate");
 const boardSelect = document.getElementById("boardType");
 const sketchSelect = document.getElementById("sketchSelect");
+const includeExamplesCheck = document.getElementById("includeExamplesCheck");
 const compileBtn = document.getElementById("compileBtn");
 const compileUploadBtn = document.getElementById("compileUploadBtn");
 const toggleViewBtn = document.getElementById("toggleViewBtn");
@@ -194,7 +453,7 @@ function setBridgeStatus({ online, message = "", detail = "", busy = false }) {
 
 function handleBridgeError(context, error) {
   const message = error?.message || String(error || "unknown error");
-  console.error(`[Bridge Error] ${context}:`, message);
+  logger.error(`Bridge Error - ${context}`, message);
   setBridgeStatus({
     online: false,
     message: "Bridge server unreachable",
@@ -345,14 +604,14 @@ async function loadBoards() {
 
     setBridgeStatus({ online: true });
   } catch (error) {
-    console.error("Error loading boards:", error);
+    logger.error("Error loading boards", error);
     handleBridgeError("Load boards", error);
     boardSelect.innerHTML =
       '<option value="arduino:avr:uno">Arduino Uno (Fallback)</option>';
   }
 }
 
-// Load Sketches
+// Load Sketches (and optionally library examples)
 async function loadSketches() {
   try {
     const response = await fetch("/api/sketches");
@@ -366,6 +625,8 @@ async function loadSketches() {
     const sketches = data.sketches || [];
 
     let selectionFound = false;
+
+    // Add workspace sketches
     sketches.forEach((sketch) => {
       const option = document.createElement("option");
       option.value = sketch.relativePath;
@@ -376,6 +637,13 @@ async function loadSketches() {
         selectionFound = true;
       }
     });
+
+    // If "Include Examples" is checked, load library examples
+    if (includeExamplesCheck && includeExamplesCheck.checked) {
+      await loadLibraryExamples(currentSelection, (found) => {
+        if (found) selectionFound = true;
+      });
+    }
 
     // Add Refresh Option
     const refreshOption = document.createElement("option");
@@ -390,60 +658,79 @@ async function loadSketches() {
       sketchSelect.value = currentSelection;
     }
   } catch (error) {
-    console.error("Error loading sketches:", error);
+    logger.error("Error loading sketches", error);
     handleBridgeError("Load sketches", error);
   }
 }
 
-// Load saved board configuration from VS Code arduino.json
-async function loadBoardConfig() {
+// Load library examples into the sketch dropdown
+async function loadLibraryExamples(currentSelection, onSelectionFound) {
   try {
-    const response = await fetch("/api/board-config");
-    if (!response.ok) return null;
-    const data = await response.json();
-    return data.config;
+    // Get list of installed libraries
+    const libResponse = await fetch("/api/cli/libraries/installed");
+    if (!libResponse.ok) return;
+
+    const libData = await libResponse.json();
+    const libraries = libData.libraries || [];
+
+    if (libraries.length === 0) return;
+
+    // Add separator before examples
+    const separator = document.createElement("option");
+    separator.disabled = true;
+    separator.textContent = "── Library Examples ──";
+    separator.style.color = "#888";
+    sketchSelect.appendChild(separator);
+
+    // For each installed library, get its examples
+    for (const lib of libraries) {
+      const examplesResponse = await fetch(
+        `/api/cli/libraries/${encodeURIComponent(lib.name)}/examples`
+      );
+
+      if (!examplesResponse.ok) continue;
+
+      const examplesData = await examplesResponse.json();
+      if (
+        !examplesData.success ||
+        !examplesData.examples ||
+        examplesData.examples.length === 0
+      ) {
+        continue;
+      }
+
+      // Add examples for this library
+      examplesData.examples.forEach((example) => {
+        const option = document.createElement("option");
+        // Use the full path as value, prefixed to identify as example
+        option.value = `__EXAMPLE__:${example.path}`;
+        // Display as "LibraryName/ExampleName"
+        const libNameClean = lib.name.replace(/_/g, " ");
+        option.textContent = `📁 ${libNameClean}/${example.name}`;
+        option.style.color = "#9cdcfe";
+        sketchSelect.appendChild(option);
+
+        if (option.value === currentSelection) {
+          onSelectionFound(true);
+        }
+      });
+    }
   } catch (error) {
-    console.warn("[Board Config] Could not load saved config:", error);
-    return null;
+    logger.error("Error loading library examples", error);
+    // Don't throw - examples are optional
   }
 }
 
-// Initialize - load boards and sketches, then apply saved config
+// Handle "Include Examples" checkbox change
+if (includeExamplesCheck) {
+  includeExamplesCheck.addEventListener("change", () => {
+    loadSketches();
+  });
+}
+
+// Initialize - load boards and sketches
 async function initialize() {
-  // Load boards and sketches first
   await Promise.all([loadBoards(), loadSketches()]);
-
-  // Now try to apply saved configuration
-  const savedConfig = await loadBoardConfig();
-  if (savedConfig) {
-    console.info("[Board Config] Loaded saved config:", savedConfig);
-
-    // Apply saved board selection
-    if (savedConfig.board) {
-      const boardOption = Array.from(boardSelect.options).find(
-        (opt) => opt.value === savedConfig.board
-      );
-      if (boardOption) {
-        boardSelect.value = savedConfig.board;
-        console.info(`[Board Config] Restored board: ${savedConfig.board}`);
-      }
-    }
-
-    // Apply saved sketch selection
-    if (savedConfig.sketch) {
-      // Extract directory name from sketch path (e.g., "demo_blink/demo_blink.ino" -> "demo_blink")
-      const sketchDir = savedConfig.sketch.split("/")[0];
-      const sketchOption = Array.from(sketchSelect.options).find(
-        (opt) => opt.value === sketchDir
-      );
-      if (sketchOption) {
-        sketchSelect.value = sketchDir;
-        console.info(`[Board Config] Restored sketch: ${sketchDir}`);
-      }
-    }
-  }
-
-  // Update UI state
   updateCompileButtons();
 }
 
@@ -501,30 +788,6 @@ sketchSelect.addEventListener("change", async (e) => {
     return;
   }
   updateCompileButtons();
-
-  // Update VS Code Arduino extension configuration with sketch
-  const sketchDir = sketchSelect.value;
-  const fqbn = boardSelect.value;
-  if (sketchDir && fqbn) {
-    try {
-      const payload = {
-        fqbn,
-        sketch: `${sketchDir}/${sketchDir.split("/").pop()}.ino`,
-      };
-      const response = await fetch("/api/board-config", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(payload),
-      });
-      if (response.ok) {
-        console.info(
-          `[Board Config] Updated VS Code config: board=${fqbn}, sketch=${payload.sketch}`
-        );
-      }
-    } catch (error) {
-      console.warn("[Board Config] Error updating VS Code config:", error);
-    }
-  }
 });
 
 boardSelect.addEventListener("change", async () => {
@@ -536,29 +799,23 @@ boardSelect.addEventListener("change", async () => {
     baudSelect.value = defaultBaud.toString();
   }
 
-  // Update VS Code Arduino extension board configuration
+  // Update IntelliSense configuration for the selected board
   const fqbn = boardSelect.value;
   if (fqbn) {
     try {
-      const payload = { fqbn };
-      // Include sketch if one is selected
-      if (sketchSelect.value && sketchSelect.value !== "__REFRESH__") {
-        // Find the .ino file path
-        const sketchDir = sketchSelect.value;
-        payload.sketch = `${sketchDir}/${sketchDir.split("/").pop()}.ino`;
-      }
-      const response = await fetch("/api/board-config", {
+      const response = await fetch("/api/intellisense", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(payload),
+        body: JSON.stringify({ fqbn }),
       });
       if (response.ok) {
-        console.info(`[Board Config] Updated VS Code config to: ${fqbn}`);
+        logger.info(`IntelliSense updated for: ${fqbn}`);
+        terminal.write(`\r\n✨ IntelliSense updated for ${fqbn}\r\n`);
       } else {
-        console.warn("[Board Config] Failed to update VS Code config");
+        logger.warn("IntelliSense: Failed to update configuration");
       }
     } catch (error) {
-      console.warn("[Board Config] Error updating VS Code config:", error);
+      logger.warn("IntelliSense: Error updating configuration", error);
     }
   }
 
@@ -591,9 +848,7 @@ async function compileSketch() {
   const sketchPath = sketchSelect.value;
   const fqbn = boardSelect.value;
 
-  console.info(
-    `[Client] Compiling sketch: '${sketchPath}' for board: '${fqbn}'`
-  );
+  logger.info(`Compiling sketch: '${sketchPath}' for board: '${fqbn}'`);
   terminal.write(`\r\n[Debug] Selected Sketch: ${sketchPath}\r\n`);
   terminal.write(`[Debug] Selected Board: ${fqbn}\r\n`);
   terminal.write(`\r\nCompiling ${sketchPath} for ${fqbn}...\r\n`);
@@ -609,6 +864,55 @@ async function compileSketch() {
 
     if (data.log) {
       terminal.write(data.log.replace(/\n/g, "\r\n") + "\r\n");
+    }
+
+    if (Array.isArray(data.missingIncludes) && data.missingIncludes.length) {
+      // Separate local includes ("header.h") from library includes (<header.h>)
+      const localIncludes = data.missingIncludes.filter(
+        (item) => item.isLibraryInclude === false
+      );
+      const libraryIncludes = data.missingIncludes.filter(
+        (item) => item.isLibraryInclude !== false
+      );
+
+      if (localIncludes.length > 0) {
+        terminal.write(
+          '\r\n⚠ Missing local files (using #include "file.h" syntax):\r\n'
+        );
+        localIncludes.forEach((item) => {
+          terminal.write(
+            `   • "${item.header}" → Add ${item.header} and ${item.query}.cpp to your sketch folder\r\n`
+          );
+        });
+      }
+
+      if (libraryIncludes.length > 0) {
+        terminal.write(
+          "\r\n⚠ Missing libraries (using #include <lib.h> syntax):\r\n"
+        );
+        libraryIncludes.forEach((item) => {
+          const suggestionNames = Array.isArray(item.suggestions)
+            ? item.suggestions.map((lib) => lib.name).filter(Boolean)
+            : [];
+
+          if (suggestionNames.length) {
+            terminal.write(
+              `   • <${
+                item.header
+              }> → Install via Library Manager: ${suggestionNames.join(
+                ", "
+              )}\r\n`
+            );
+          } else {
+            terminal.write(
+              `   • <${item.header}> → Search Library Manager for "${item.query}"\r\n`
+            );
+          }
+        });
+        terminal.write(
+          "   💡 After installing, recompile to refresh IntelliSense\r\n"
+        );
+      }
     }
 
     if (data.success && data.artifact) {
@@ -678,10 +982,7 @@ async function handleUpload(port, firmwareData, fqbn) {
       try {
         await serialManager.write("\r\n");
       } catch (handshakeError) {
-        console.warn(
-          "[Client] Unable to send reconnection handshake:",
-          handshakeError
-        );
+        logger.warn("Unable to send reconnection handshake", handshakeError);
       }
 
       // Success - update UI to connected state
@@ -695,7 +996,7 @@ async function handleUpload(port, firmwareData, fqbn) {
       serialManager.resume();
       terminal.write("Serial monitor reconnected.\r\n");
     } catch (e) {
-      console.error("Reconnect failed:", e);
+      logger.error("Reconnect failed", e);
       terminal.write("\r\nReconnect failed. Please connect manually.\r\n");
       // Resume serial monitor even on reconnect failure
       serialManager.resume();
@@ -773,8 +1074,8 @@ async function handleUpload(port, firmwareData, fqbn) {
             try {
               await serialManager.write("\r\n");
             } catch (handshakeError) {
-              console.warn(
-                "[Client] Unable to send post-bootloader handshake:",
+              logger.warn(
+                "Unable to send post-bootloader handshake",
                 handshakeError
               );
             }
@@ -791,7 +1092,7 @@ async function handleUpload(port, firmwareData, fqbn) {
             updateCompileButtons();
           }
         } catch (e) {
-          console.error("Bootloader flash failed:", e);
+          logger.error("Bootloader flash failed", e);
           terminal.write(`\r\nBootloader flash failed: ${e.message}\r\n`);
           serialManager.resume();
           connectBtn.disabled = false;
@@ -873,7 +1174,7 @@ async function handleUpload(port, firmwareData, fqbn) {
       return;
     }
 
-    console.error("Upload failed:", error);
+    logger.error("Upload failed", error);
     terminal.write(`\r\nUpload Error: ${error.message}\r\n`);
 
     // Try to reconnect
@@ -901,15 +1202,12 @@ async function handleUpload(port, firmwareData, fqbn) {
       try {
         await serialManager.write("\r\n");
       } catch (handshakeError) {
-        console.warn(
-          "[Client] Unable to send recovery handshake:",
-          handshakeError
-        );
+        logger.warn("Unable to send recovery handshake", handshakeError);
       }
       // Resume serial monitor after error recovery
       serialManager.resume();
     } catch (e) {
-      console.error("Recovery reconnect failed:", e);
+      logger.error("Recovery reconnect failed", e);
       serialManager.resume();
       // Reset UI to disconnected state
       connectBtn.disabled = false;
@@ -1121,9 +1419,8 @@ function checkBoardMismatch(port, fqbn) {
     const handleContinue = () => {
       mismatchModal.style.display = "none";
       cleanup();
-      console.warn(
-        `[Board Mismatch] User chose to proceed with upload despite mismatch.` +
-          ` Connected: ${connectedLabel}, Selected: ${selectedBoard.name}`
+      logger.warn(
+        `Board Mismatch: User chose to proceed. Connected: ${connectedLabel}, Selected: ${selectedBoard.name}`
       );
       resolve(true);
     };
@@ -1189,10 +1486,7 @@ connectBtn.addEventListener("click", async () => {
     try {
       await serialManager.write("\r\n");
     } catch (handshakeError) {
-      console.warn(
-        "[Client] Unable to send connection handshake:",
-        handshakeError
-      );
+      logger.warn("Unable to send connection handshake", handshakeError);
     }
 
     connectBtn.disabled = true;
@@ -1205,7 +1499,7 @@ connectBtn.addEventListener("click", async () => {
 
     terminal.write("\r\nConnected to Serial Port\r\n");
   } catch (error) {
-    console.error("Connection failed:", error);
+    logger.error("Connection failed", error);
     terminal.write(`\r\nError: ${error.message}\r\n`);
   }
 });
@@ -1343,3 +1637,67 @@ serialInput.addEventListener("keydown", (e) => {
     sendData();
   }
 });
+
+// ==========================================
+// Main Navigation Setup
+// ==========================================
+
+function setupNavigation() {
+  const navTabs = document.querySelectorAll(".nav-tab");
+  const views = document.querySelectorAll(".view-container");
+  const inputBar = document.querySelector(".input-bar");
+  const toolbarGroup = document.querySelector(".toolbar-group");
+
+  // Handle navigation tab clicks
+  navTabs.forEach((tab) => {
+    tab.addEventListener("click", () => {
+      const targetView = tab.dataset.view;
+
+      // Update active tab
+      navTabs.forEach((t) => t.classList.remove("active"));
+      tab.classList.add("active");
+
+      // Update active view
+      views.forEach((v) => v.classList.remove("active"));
+      const targetViewEl = document.getElementById(`${targetView}-view`);
+      if (targetViewEl) {
+        targetViewEl.classList.add("active");
+      }
+
+      // Show/hide serial-specific UI elements
+      const isSerialView = targetView === "serial";
+      if (inputBar) {
+        inputBar.style.display = isSerialView ? "flex" : "none";
+      }
+      if (toolbarGroup) {
+        toolbarGroup.style.display = isSerialView ? "flex" : "none";
+      }
+
+      // Resize terminal when switching to serial view
+      if (isSerialView && terminal && terminal.fit) {
+        setTimeout(() => terminal.fit(), 100);
+      }
+    });
+  });
+
+  // Handle hash-based routing (for deep links)
+  function handleHashRoute() {
+    const hash = window.location.hash.replace("#/", "").replace("#", "");
+    const validViews = ["serial", "boards", "libraries", "reference"];
+
+    if (validViews.includes(hash)) {
+      const tab = document.querySelector(`.nav-tab[data-view="${hash}"]`);
+      if (tab) {
+        tab.click();
+      }
+    }
+  }
+
+  // Listen for hash changes
+  window.addEventListener("hashchange", handleHashRoute);
+
+  // Check initial hash on load
+  if (window.location.hash) {
+    handleHashRoute();
+  }
+}

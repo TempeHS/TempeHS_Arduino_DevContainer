@@ -11,21 +11,12 @@
   "workbench.colorTheme": "Default Dark+",
   "workbench.iconTheme": "icons",
   "C_Cpp.updateChannel": "Insiders",
-  "C_Cpp.intelliSenseEngine": "Default",
+  "C_Cpp.intelliSenseEngine": "default",
   "C_Cpp.default.intelliSenseMode": "gcc-x64",
-  "C_Cpp.default.configurationProvider": "vscode-arduino.vscode-arduino-community",
-  "arduino.logLevel": "info",
-  "arduino.disableTestingOpen": false,
-  "arduino.skipHeaderProvider": true,
-  "arduino.defaultBaudRate": 115200,
-  "arduino.enableUSBDetection": false,
-  "arduino.useArduinoCli": true,
-  "arduino.path": "/usr/local/bin",
-  "arduino.commandPath": "arduino-cli",
-  "arduino.sketchbookPath": "/home/vscode/Arduino",
-  "arduino.additionalUrls": [],
-  "http.proxySupport": "off",
-  "arduino.allowPDEFiletype": false,
+  "C_Cpp.default.cppStandard": "c++11",
+  "C_Cpp.default.cStandard": "c11",
+  "C_Cpp.errorSquiggles": "enabled",
+  "C_Cpp.autocompleteAddParentheses": true,
   "github.copilot.enable": {
     "python": false,
     "html": false,
@@ -35,5 +26,54 @@
   "chat.agent.enabled": true,
   "github.copilot.chat.participant.alwaysInclude": [
     ".github/arduino-bridge-instructions.md"
+  ],
+
+  "files.associations": {
+    "*.ino": "cpp",
+    "*.pde": "cpp"
+  },
+
+  "[cpp]": {
+    "editor.defaultFormatter": "xaver.clang-format",
+    "editor.formatOnSave": true,
+    "editor.tabSize": 2,
+    "editor.insertSpaces": true,
+    "editor.quickSuggestions": {
+      "other": true,
+      "comments": false,
+      "strings": false
+    },
+    "editor.suggest.snippetsPreventQuickSuggestions": false,
+    "editor.wordBasedSuggestions": "matchingDocuments",
+    "editor.suggestOnTriggerCharacters": true
+  },
+
+  "[c]": {
+    "editor.defaultFormatter": "xaver.clang-format",
+    "editor.formatOnSave": true,
+    "editor.tabSize": 2,
+    "editor.insertSpaces": true
+  },
+
+  "cSpell.words": [
+    "Arduino",
+    "FQBN",
+    "GPIO",
+    "PWM",
+    "EEPROM",
+    "WiFi",
+    "Uno",
+    "Nano",
+    "Mega",
+    "Renesas",
+    "digitalWrite",
+    "digitalRead",
+    "analogWrite",
+    "analogRead",
+    "pinMode",
+    "millis",
+    "micros",
+    "Serial",
+    "PROGMEM"
   ]
 }

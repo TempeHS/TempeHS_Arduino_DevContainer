@@ -4,7 +4,7 @@
  */
 import { UploadLogger } from "../utils/UploadLogger.js";
 
-export class ESPTool {
+export class ESPToolProtocol {
   constructor(port, logger) {
     this.port = port;
     this.logger = logger || new UploadLogger("ESPTool").getLogFunction();

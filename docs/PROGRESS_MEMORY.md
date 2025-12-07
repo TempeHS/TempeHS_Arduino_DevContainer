@@ -147,10 +147,6 @@ When `avrdude` opens a serial port, it toggles DTR to reset the Arduino. This tr
   - Listens for `pulse-dtr` from server and toggles DTR/RTS (100ms pulse).
   - Contains unused `perform1200bpsTouch` function (for Leonardo/Uno R4).
 
-### `.vscode/arduino.json`
-
-- Configured to use `port: "/tmp/arduinoUSB2"`.
-
 ### New: `arduino-bridge3/`
 
 - **server.js:**

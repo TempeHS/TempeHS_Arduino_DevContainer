@@ -1,0 +1,5 @@
+# Ignore all symlinks to library examples
+# These are auto-generated and machine-specific
+*
+!.gitignore
+!README.md

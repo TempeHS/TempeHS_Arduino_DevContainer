@@ -1,17 +1,70 @@
+/**
+ * Serial Plotter UI Component
+ *
+ * Provides real-time data visualization:
+ * - Chart.js-based line graph
+ * - Multiple data series support
+ * - Freeze/resume functionality
+ * - PNG export capability
+ *
+ * @module client/ui/PlotterUI
+ */
+
 import Chart from "chart.js/auto";
 
+// =============================================================================
+// Constants
+// =============================================================================
+
+/** @constant {number} DEFAULT_MAX_DATA_POINTS - Maximum number of data points to display */
+const DEFAULT_MAX_DATA_POINTS = 100;
+
+/** @constant {string[]} CHART_COLORS - Color palette for data series */
+const CHART_COLORS = [
+  "#FF6384", // Red
+  "#36A2EB", // Blue
+  "#FFCE56", // Yellow
+  "#4BC0C0", // Teal
+  "#9966FF", // Purple
+  "#FF9F40", // Orange
+];
+
+// =============================================================================
+// PlotterUI Class
+// =============================================================================
+
+/**
+ * Serial Plotter UI component for real-time data visualization
+ */
 export class PlotterUI {
+  /**
+   * Create a new PlotterUI instance
+   * @param {string} containerId - DOM element ID for the plotter container
+   */
   constructor(containerId) {
+    /** @type {HTMLElement} */
     this.container = document.getElementById(containerId);
+
+    /** @type {HTMLCanvasElement} */
     this.canvas = document.createElement("canvas");
     this.container.appendChild(this.canvas);
 
-    this.maxDataPoints = 100;
+    /** @type {number} Maximum data points to display */
+    this.maxDataPoints = DEFAULT_MAX_DATA_POINTS;
+
+    /** @type {Chart|null} Chart.js instance */
     this.chart = null;
+
+    /** @type {boolean} Whether the chart is frozen */
     this.frozen = false;
+
     this.initChart();
   }
 
+  /**
+   * Initialize the Chart.js chart instance
+   * @private
+   */
   initChart() {
     const ctx = this.canvas.getContext("2d");
     this.chart = new Chart(ctx, {
@@ -23,7 +76,7 @@ export class PlotterUI {
       options: {
         responsive: true,
         maintainAspectRatio: false,
-        animation: false, // Disable animation for performance
+        animation: false,
         interaction: {
           mode: "index",
           intersect: false,
@@ -46,10 +99,10 @@ export class PlotterUI {
         },
         elements: {
           point: {
-            radius: 0, // Hide points for cleaner look
+            radius: 0,
           },
           line: {
-            tension: 0.1, // Slight curve
+            tension: 0.1,
           },
         },
       },
@@ -94,6 +147,9 @@ export class PlotterUI {
     this.chart.update();
   }
 
+  /**
+   * Clear all data from the chart
+   */
   clear() {
     if (!this.chart) return;
     this.chart.data.labels = [];
@@ -101,27 +157,28 @@ export class PlotterUI {
     this.chart.update();
   }
 
+  /**
+   * Resize the chart to fit its container
+   */
   resize() {
     if (this.chart) {
       this.chart.resize();
     }
   }
 
+  /**
+   * Get a color from the palette for a data series
+   * @param {number} index - Series index
+   * @returns {string} CSS color value
+   * @private
+   */
   getColor(index) {
-    const colors = [
-      "#FF6384", // Red
-      "#36A2EB", // Blue
-      "#FFCE56", // Yellow
-      "#4BC0C0", // Teal
-      "#9966FF", // Purple
-      "#FF9F40", // Orange
-    ];
-    return colors[index % colors.length];
+    return CHART_COLORS[index % CHART_COLORS.length];
   }
 
   /**
    * Toggle freeze state of the plotter
-   * @returns {boolean} - New frozen state
+   * @returns {boolean} New frozen state
    */
   toggleFreeze() {
     this.frozen = !this.frozen;
@@ -130,7 +187,7 @@ export class PlotterUI {
 
   /**
    * Check if plotter is frozen
-   * @returns {boolean}
+   * @returns {boolean} Whether the plotter is frozen
    */
   isFrozen() {
     return this.frozen;
@@ -138,7 +195,7 @@ export class PlotterUI {
 
   /**
    * Set freeze state explicitly
-   * @param {boolean} frozen
+   * @param {boolean} frozen - Whether to freeze the plotter
    */
   setFrozen(frozen) {
     this.frozen = frozen;

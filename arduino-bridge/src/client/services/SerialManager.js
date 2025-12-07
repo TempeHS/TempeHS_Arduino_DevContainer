@@ -1,16 +1,53 @@
+/**
+ * Serial Manager Service
+ *
+ * Manages serial communication with Arduino devices:
+ * - Connect/disconnect via WebSerial API
+ * - Data buffering and line parsing
+ * - Baud rate detection/scanning
+ * - Pause/resume for upload operations
+ *
+ * @module client/services/SerialManager
+ */
+
 import { WebSerialProvider } from "../providers/WebSerialProvider.js";
 
-// Common baud rates to scan, ordered by prevalence in Arduino projects
+// =============================================================================
+// Constants
+// =============================================================================
+
+/** Common baud rates to scan, ordered by prevalence in Arduino projects */
 const COMMON_BAUD_RATES = [
   115200, 9600, 57600, 38400, 19200, 74880, 230400, 250000,
 ];
 
+/** Minimum percentage of printable ASCII characters for valid data detection */
+const ASCII_THRESHOLD = 0.8;
+
+/** Delay in ms between baud rate scan attempts */
+const BAUD_DETECT_DELAY_MS = 500;
+
+/** Minimum bytes needed to determine if data is valid ASCII */
+const MIN_BYTES_FOR_DETECTION = 5;
+
+// =============================================================================
+// SerialManager Class
+// =============================================================================
+
+/**
+ * Manages serial communication with Arduino devices
+ */
 export class SerialManager {
   constructor() {
+    /** @type {WebSerialProvider} */
     this.provider = new WebSerialProvider();
+    /** @type {string} */
     this.buffer = "";
+    /** @type {boolean} */
     this.paused = false;
+    /** @type {boolean} */
     this.baudDetectionActive = false;
+    /** @type {{line: Function[], baudDetected: Function[]}} */
     this.listeners = {
       line: [],
       baudDetected: [],
@@ -21,19 +58,39 @@ export class SerialManager {
     });
   }
 
+  /**
+   * Connect to a serial port
+   * @param {number} baudRate - Baud rate for connection
+   * @param {SerialPort|null} port - Optional port to connect to
+   * @returns {Promise<boolean>}
+   */
   async connect(baudRate, port = null) {
     return await this.provider.connect(baudRate, port);
   }
 
+  /**
+   * Disconnect from the serial port
+   * @returns {Promise<void>}
+   */
   async disconnect() {
     this.baudDetectionActive = false;
     return await this.provider.disconnect();
   }
 
+  /**
+   * Write data to the serial port
+   * @param {string} data - Data to write
+   * @returns {Promise<void>}
+   */
   async write(data) {
     return await this.provider.write(data);
   }
 
+  /**
+   * Set control signals (DTR, RTS)
+   * @param {object} signals - Signal states
+   * @returns {Promise<void>}
+   */
   async setSignals(signals) {
     return await this.provider.setSignals(signals);
   }
@@ -44,7 +101,7 @@ export class SerialManager {
    */
   pause() {
     this.paused = true;
-    this.buffer = ""; // Clear buffer when pausing
+    this.buffer = "";
   }
 
   /**
@@ -62,7 +119,6 @@ export class SerialManager {
   isAsciiData(data) {
     if (!data || data.length === 0) return false;
 
-    // Count printable ASCII characters (space through tilde, plus common control chars)
     let printableCount = 0;
     let totalCount = 0;
 
@@ -80,8 +136,7 @@ export class SerialManager {
       }
     }
 
-    // If > 80% of characters are printable ASCII, consider it valid
-    return totalCount > 0 && printableCount / totalCount > 0.8;
+    return totalCount > 0 && printableCount / totalCount > ASCII_THRESHOLD;
   }
 
   /**

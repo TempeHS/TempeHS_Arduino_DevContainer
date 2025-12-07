@@ -125,7 +125,7 @@
     </div>
 
     <script type="module">
-      import { Bossa } from "../src/client/services/protocols/Bossa.js";
+      import { BossaProtocol } from "../src/client/services/protocols/Bossa.js";
       import { BOSSA_RENESAS } from "../src/client/config/boardProtocols.js";
 
       let startTime = 0;
@@ -372,7 +372,7 @@
         progress(0, "Starting...");
 
         const mockPort = new TimingMockPort();
-        const bossa = new Bossa(mockPort);
+        const bossa = new BossaProtocol(mockPort);
 
         try {
           // ===== CONNECT =====

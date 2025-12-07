@@ -133,6 +133,33 @@ select {
   margin: 0 10px;
 }
 
+/* Checkbox label styling for toolbar */
+.checkbox-label {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  color: #ccc;
+  font-size: 12px;
+  cursor: pointer;
+  user-select: none;
+  white-space: nowrap;
+}
+
+.checkbox-label input[type="checkbox"] {
+  width: 14px;
+  height: 14px;
+  cursor: pointer;
+  accent-color: #007acc;
+}
+
+.checkbox-label span {
+  color: #aaa;
+}
+
+.checkbox-label:hover span {
+  color: #fff;
+}
+
 .status-banner {
   display: flex;
   align-items: center;
@@ -186,4 +213,902 @@ select {
 .secondary-btn:disabled {
   opacity: 0.6;
   cursor: not-allowed;
+}
+
+/* ==========================================
+   Main Navigation Tabs
+   ========================================== */
+
+.main-nav {
+  display: flex;
+  gap: 0;
+  background: #1e1e1e;
+  border-bottom: 1px solid #3c3c3c;
+  padding: 0 10px;
+}
+
+.nav-tab {
+  padding: 10px 20px;
+  background: transparent;
+  border: none;
+  border-bottom: 2px solid transparent;
+  color: #808080;
+  cursor: pointer;
+  font-size: 13px;
+  transition: all 0.2s;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.nav-tab:hover {
+  color: #d4d4d4;
+  background: rgba(255, 255, 255, 0.05);
+}
+
+.nav-tab.active {
+  color: #00979d;
+  border-bottom-color: #00979d;
+}
+
+.nav-icon {
+  font-size: 14px;
+}
+
+/* ==========================================
+   View Containers
+   ========================================== */
+
+.view-container {
+  display: none;
+  flex: 1;
+  overflow: hidden;
+}
+
+.view-container.active {
+  display: flex;
+  flex-direction: column;
+}
+
+/* Serial view needs special handling for terminal */
+#serial-view #main-content {
+  flex: 1;
+  position: relative;
+  overflow: hidden;
+}
+
+/* ==========================================
+   Manager Views (Board & Library)
+   ========================================== */
+
+.manager-header {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 15px 20px;
+  background: #252526;
+  border-bottom: 1px solid #3c3c3c;
+}
+
+.manager-header h2 {
+  margin: 0;
+  font-size: 16px;
+  font-weight: 600;
+  color: #00979d;
+}
+
+.manager-controls {
+  display: flex;
+  gap: 10px;
+  align-items: center;
+  flex-wrap: wrap;
+}
+
+.manager-controls input[type="text"] {
+  flex: 1;
+  min-width: 200px;
+  max-width: 400px;
+  padding: 8px 12px;
+  background: #3c3c3c;
+  border: 1px solid #555;
+  border-radius: 4px;
+  color: #d4d4d4;
+  font-size: 13px;
+}
+
+.manager-controls input[type="text"]:focus {
+  outline: none;
+  border-color: #00979d;
+}
+
+.manager-controls select {
+  padding: 8px 12px;
+  background: #3c3c3c;
+  border: 1px solid #555;
+  border-radius: 4px;
+  color: #d4d4d4;
+  font-size: 13px;
+}
+
+.checkbox-label {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  color: #d4d4d4;
+  font-size: 12px;
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.refresh-btn {
+  background: #3c3c3c;
+  color: #d4d4d4;
+  border: 1px solid #555;
+  padding: 8px 12px;
+  border-radius: 4px;
+  cursor: pointer;
+  font-size: 12px;
+}
+
+.refresh-btn:hover {
+  background: #4a4a4a;
+}
+
+.index-status {
+  font-size: 12px;
+}
+
+.status-ok {
+  color: #4ec9b0;
+}
+
+.status-warning {
+  color: #f59e0b;
+}
+
+/* ==========================================
+   Manager List Grid
+   ========================================== */
+
+.manager-list {
+  flex: 1;
+  overflow-y: auto;
+  padding: 15px 20px;
+  display: grid;
+  gap: 15px;
+  grid-template-columns: repeat(auto-fill, minmax(350px, 1fr));
+  align-content: start;
+}
+
+/* ==========================================
+   Platform & Library Cards
+   ========================================== */
+
+.platform-card,
+.library-card {
+  background: #2d2d2d;
+  border: 1px solid #3c3c3c;
+  border-radius: 8px;
+  padding: 15px;
+  transition: border-color 0.2s;
+}
+
+.platform-card:hover,
+.library-card:hover {
+  border-color: #555;
+}
+
+.platform-card.installed,
+.library-card.installed {
+  border-left: 3px solid #00979d;
+}
+
+.platform-header,
+.library-header {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  margin-bottom: 8px;
+}
+
+.platform-header h3,
+.library-header h3 {
+  margin: 0;
+  font-size: 14px;
+  font-weight: 600;
+  color: #d4d4d4;
+}
+
+.maintainer,
+.author {
+  font-size: 11px;
+  color: #888;
+}
+
+.platform-id {
+  font-size: 11px;
+  color: #666;
+  font-family: monospace;
+  margin-bottom: 8px;
+}
+
+.library-desc {
+  font-size: 12px;
+  color: #aaa;
+  margin: 0 0 10px 0;
+  line-height: 1.4;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+
+.platform-boards {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  margin-bottom: 12px;
+}
+
+.board-chip {
+  display: inline-block;
+  background: #3c3c3c;
+  padding: 2px 8px;
+  border-radius: 3px;
+  font-size: 11px;
+  color: #aaa;
+}
+
+.board-chip.more {
+  background: #2a2a2a;
+  color: #666;
+}
+
+.library-meta {
+  display: flex;
+  gap: 10px;
+  margin-bottom: 12px;
+  font-size: 11px;
+}
+
+.library-meta .category {
+  background: #3c3c3c;
+  padding: 2px 8px;
+  border-radius: 3px;
+  color: #aaa;
+}
+
+.library-meta .architectures {
+  color: #666;
+}
+
+.platform-actions,
+.library-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.version-select {
+  padding: 4px 8px;
+  background: #3c3c3c;
+  border: 1px solid #555;
+  border-radius: 3px;
+  color: #d4d4d4;
+  font-size: 12px;
+  max-width: 120px;
+}
+
+.installed-badge {
+  color: #00979d;
+  font-weight: bold;
+  font-size: 12px;
+}
+
+.btn-install,
+.btn-upgrade {
+  background: #00979d;
+  color: white;
+  border: none;
+  padding: 6px 12px;
+  border-radius: 4px;
+  cursor: pointer;
+  font-size: 12px;
+  font-weight: 500;
+}
+
+.btn-install:hover,
+.btn-upgrade:hover {
+  background: #00b0b9;
+}
+
+.btn-remove {
+  background: #6c4444;
+  color: white;
+  border: none;
+  padding: 6px 12px;
+  border-radius: 4px;
+  cursor: pointer;
+  font-size: 12px;
+}
+
+.btn-remove:hover {
+  background: #8a5555;
+}
+
+.install-deps-label {
+  font-size: 11px;
+  color: #888;
+}
+
+.install-deps-label.warning {
+  color: #f1c40f;
+}
+
+.deps-warning {
+  margin-top: 6px;
+  font-size: 11px;
+  color: #f6d365;
+  background: rgba(241, 196, 15, 0.12);
+  border: 1px solid rgba(241, 196, 15, 0.3);
+  padding: 6px 8px;
+  border-radius: 4px;
+  display: none;
+}
+
+.deps-warning.visible {
+  display: block;
+}
+
+/* ==========================================
+   Progress Panel
+   ========================================== */
+
+.job-progress {
+  background: #1a1a1a;
+  border-top: 1px solid #00979d;
+  padding: 15px;
+  max-height: 250px;
+  display: flex;
+  flex-direction: column;
+}
+
+.progress-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 10px;
+}
+
+.progress-title {
+  font-size: 13px;
+  font-weight: 500;
+  color: #00979d;
+}
+
+.progress-close {
+  background: transparent;
+  border: none;
+  color: #888;
+  font-size: 18px;
+  cursor: pointer;
+  padding: 0 5px;
+}
+
+.progress-close:hover {
+  color: #d4d4d4;
+}
+
+.progress-log {
+  flex: 1;
+  overflow-y: auto;
+  font-family: "Consolas", "Monaco", monospace;
+  font-size: 12px;
+  white-space: pre-wrap;
+  color: #aaa;
+  background: #0d0d0d;
+  padding: 10px;
+  border-radius: 4px;
+  margin: 0;
+}
+
+/* ==========================================
+   Empty & Error States
+   ========================================== */
+
+.empty-state,
+.error-state,
+.loading-placeholder {
+  grid-column: 1 / -1;
+  text-align: center;
+  padding: 40px 20px;
+  color: #888;
+}
+
+.empty-state p,
+.error-state p {
+  margin: 5px 0;
+}
+
+.error-state {
+  color: #f59e0b;
+}
+
+.loading-placeholder {
+  color: #666;
+}
+
+.more-results {
+  grid-column: 1 / -1;
+  text-align: center;
+  padding: 15px;
+  color: #666;
+  font-size: 12px;
+}
+
+/* ==========================================
+   Modal Styles
+   ========================================== */
+
+.modal-overlay {
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  background: rgba(0, 0, 0, 0.7);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 1000;
+}
+
+.modal-content {
+  background: #2d2d2d;
+  border: 1px solid #404040;
+  border-radius: 8px;
+  max-width: 700px;
+  width: 90%;
+  max-height: 80vh;
+  display: flex;
+  flex-direction: column;
+}
+
+.modal-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 15px 20px;
+  border-bottom: 1px solid #404040;
+}
+
+.modal-header h3 {
+  margin: 0;
+  font-size: 16px;
+  color: #e0e0e0;
+}
+
+.modal-close {
+  background: none;
+  border: none;
+  color: #888;
+  font-size: 24px;
+  cursor: pointer;
+  padding: 0 5px;
+  line-height: 1;
+}
+
+.modal-close:hover {
+  color: #fff;
+}
+
+.modal-body {
+  padding: 20px;
+  overflow-y: auto;
+}
+
+.modal-description {
+  margin: 0 0 15px 0;
+  color: #888;
+  font-size: 13px;
+  line-height: 1.5;
+}
+
+/* URL Modal Specific */
+
+.url-input-group {
+  display: flex;
+  gap: 10px;
+  margin-bottom: 15px;
+}
+
+.url-input-group input {
+  flex: 1;
+  padding: 10px 12px;
+  background: #1e1e1e;
+  border: 1px solid #404040;
+  border-radius: 4px;
+  color: #d4d4d4;
+  font-size: 13px;
+}
+
+.url-input-group input:focus {
+  outline: none;
+  border-color: #00979d;
+}
+
+.url-list {
+  background: #1e1e1e;
+  border: 1px solid #404040;
+  border-radius: 4px;
+  max-height: 200px;
+  overflow-y: auto;
+  margin-bottom: 15px;
+}
+
+.url-item {
+  display: flex;
+  align-items: center;
+  padding: 10px 12px;
+  border-bottom: 1px solid #333;
+  gap: 10px;
+}
+
+.url-item:last-child {
+  border-bottom: none;
+}
+
+.url-text {
+  flex: 1;
+  font-family: monospace;
+  font-size: 12px;
+  color: #9cdcfe;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.btn-remove-url {
+  background: #dc2626;
+  border: none;
+  color: white;
+  width: 24px;
+  height: 24px;
+  border-radius: 4px;
+  cursor: pointer;
+  font-size: 16px;
+  line-height: 1;
+  flex-shrink: 0;
+}
+
+.btn-remove-url:hover {
+  background: #ef4444;
+}
+
+.empty-urls {
+  padding: 20px;
+  text-align: center;
+  color: #666;
+}
+
+.empty-urls p {
+  margin: 5px 0;
+}
+
+.url-hint {
+  font-size: 12px;
+  color: #555;
+}
+
+.common-urls {
+  background: #252526;
+  border-radius: 4px;
+  padding: 12px 15px;
+}
+
+.common-urls-title {
+  margin: 0 0 10px 0;
+  font-size: 12px;
+  color: #888;
+  font-weight: 600;
+}
+
+.common-urls-list {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.common-urls-list li {
+  margin: 8px 0;
+  font-size: 11px;
+  color: #888;
+  line-height: 1.4;
+}
+
+.common-urls-list code {
+  display: block;
+  background: #1e1e1e;
+  padding: 6px 8px;
+  border-radius: 3px;
+  margin-top: 4px;
+  color: #9cdcfe;
+  font-size: 10px;
+  word-break: break-all;
+  cursor: text;
+  user-select: all;
+}
+
+/* Secondary button style */
+.secondary-btn {
+  padding: 6px 12px;
+  background: #404040;
+  border: 1px solid #555;
+  border-radius: 4px;
+  color: #d4d4d4;
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.secondary-btn:hover {
+  background: #4a4a4a;
+  border-color: #666;
+}
+
+/* ==========================================
+   Custom Install Modal Styles
+   ========================================== */
+
+.custom-install-modal {
+  max-width: 600px;
+}
+
+.install-section {
+  margin-bottom: 20px;
+}
+
+.install-section h4 {
+  margin: 0 0 8px 0;
+  font-size: 14px;
+  color: #e0e0e0;
+}
+
+.install-divider {
+  display: flex;
+  align-items: center;
+  margin: 20px 0;
+  color: #666;
+}
+
+.install-divider::before,
+.install-divider::after {
+  content: "";
+  flex: 1;
+  height: 1px;
+  background: #404040;
+}
+
+.install-divider span {
+  padding: 0 15px;
+  font-size: 12px;
+  text-transform: uppercase;
+}
+
+.install-examples {
+  margin-top: 10px;
+}
+
+.install-examples .example-title {
+  font-size: 11px;
+  color: #666;
+  margin: 0 0 5px 0;
+}
+
+.install-examples code {
+  display: block;
+  background: #1e1e1e;
+  padding: 6px 10px;
+  border-radius: 3px;
+  margin: 4px 0;
+  color: #9cdcfe;
+  font-size: 11px;
+  word-break: break-all;
+  cursor: text;
+  user-select: all;
+}
+
+/* ==========================================
+   Reference View
+   ========================================== */
+
+#reference-content {
+  flex: 1;
+  overflow-y: auto;
+  padding: 15px 20px;
+}
+
+.reference-sections {
+  display: flex;
+  flex-direction: column;
+  gap: 25px;
+}
+
+.reference-section {
+  background: #252526;
+  border-radius: 8px;
+  padding: 15px 20px;
+  border: 1px solid #3c3c3c;
+}
+
+.section-title {
+  margin: 0 0 15px 0;
+  font-size: 16px;
+  font-weight: 600;
+  color: #00979d;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding-bottom: 10px;
+  border-bottom: 1px solid #3c3c3c;
+}
+
+.section-icon {
+  font-size: 18px;
+}
+
+.function-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(300px, 1fr));
+  gap: 12px;
+}
+
+.function-card {
+  background: #2d2d2d;
+  border: 1px solid #3c3c3c;
+  border-radius: 6px;
+  padding: 12px;
+  cursor: pointer;
+  transition: border-color 0.2s, box-shadow 0.2s;
+}
+
+.function-card:hover {
+  border-color: #00979d;
+  box-shadow: 0 2px 8px rgba(0, 151, 157, 0.15);
+}
+
+.function-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 6px;
+}
+
+.function-name {
+  font-family: "Consolas", "Monaco", "Courier New", monospace;
+  font-size: 14px;
+  font-weight: 600;
+  color: #dcdcaa;
+  background: #1e1e1e;
+  padding: 3px 8px;
+  border-radius: 3px;
+}
+
+.expand-icon {
+  font-size: 10px;
+  color: #666;
+  transition: transform 0.2s;
+}
+
+.function-card.expanded .expand-icon {
+  transform: rotate(180deg);
+}
+
+.function-desc {
+  margin: 0;
+  font-size: 12px;
+  color: #888;
+  line-height: 1.4;
+}
+
+.function-details {
+  display: none;
+  margin-top: 12px;
+  padding-top: 12px;
+  border-top: 1px solid #3c3c3c;
+}
+
+.function-card.expanded .function-details {
+  display: block;
+}
+
+.detail-row {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  margin-bottom: 10px;
+}
+
+.detail-row:last-child {
+  margin-bottom: 0;
+}
+
+.detail-label {
+  font-size: 11px;
+  font-weight: 600;
+  color: #4ec9b0;
+  text-transform: uppercase;
+}
+
+.detail-value {
+  font-size: 12px;
+  color: #d4d4d4;
+  line-height: 1.4;
+}
+
+.detail-value code,
+code.detail-value {
+  font-family: "Consolas", "Monaco", "Courier New", monospace;
+  background: #1e1e1e;
+  padding: 4px 8px;
+  border-radius: 3px;
+  display: inline-block;
+  color: #9cdcfe;
+}
+
+.no-results {
+  text-align: center;
+  padding: 60px 20px;
+  color: #666;
+}
+
+.no-results-icon {
+  font-size: 48px;
+  display: block;
+  margin-bottom: 15px;
+}
+
+.no-results p {
+  margin: 0;
+  font-size: 14px;
+}
+
+/* Link button in reference header */
+.link-btn {
+  background: transparent;
+  color: #00979d;
+  border: 1px solid #00979d;
+  padding: 8px 12px;
+  border-radius: 4px;
+  cursor: pointer;
+  font-size: 12px;
+  text-decoration: none;
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+}
+
+.link-btn:hover {
+  background: rgba(0, 151, 157, 0.1);
+}
+
+/* Read more link in function cards */
+.read-more-link {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  margin-top: 12px;
+  padding: 6px 10px;
+  background: rgba(0, 151, 157, 0.1);
+  border: 1px solid #00979d;
+  border-radius: 4px;
+  color: #00979d;
+  font-size: 12px;
+  text-decoration: none;
+  transition: background 0.2s, color 0.2s;
+}
+
+.read-more-link:hover {
+  background: #00979d;
+  color: #fff;
 }

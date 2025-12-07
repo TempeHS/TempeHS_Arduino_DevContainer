@@ -1,3 +1,8 @@
+import { Logger } from "../../shared/Logger.js";
+
+/** @type {Logger} */
+const logger = new Logger("WebHID");
+
 export class WebHIDProvider {
   constructor() {
     this.device = null;
@@ -9,7 +14,7 @@ export class WebHIDProvider {
       this.device = devices[0];
       return this.device;
     } catch (error) {
-      console.error("Error requesting HID device:", error);
+      logger.error("Error requesting HID device", error);
       throw error;
     }
   }

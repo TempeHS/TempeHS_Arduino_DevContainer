@@ -86,6 +86,27 @@ export class ServerUploadStrategy {
       const result = await response.json();
 
       if (!response.ok || !result.success) {
+        if (
+          Array.isArray(result.missingIncludes) &&
+          result.missingIncludes.length
+        ) {
+          this.log.warn("Missing libraries detected during server compile.");
+          result.missingIncludes.forEach((item) => {
+            const suggestionNames = Array.isArray(item.suggestions)
+              ? item.suggestions.map((lib) => lib.name).filter(Boolean)
+              : [];
+
+            if (suggestionNames.length) {
+              this.log.info(
+                `${item.header} → install ${suggestionNames.join(", ")}`
+              );
+            } else {
+              this.log.info(
+                `${item.header} → search Library Manager for "${item.query}"`
+              );
+            }
+          });
+        }
         this.log.error("Server upload failed", result.error || result);
         throw new Error(result.error || "Server upload failed");
       }

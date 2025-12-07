@@ -97,7 +97,7 @@
     </div>
 
     <script type="module">
-      import { Bossa } from "../src/client/services/protocols/Bossa.js";
+      import { BossaProtocol } from "../src/client/services/protocols/Bossa.js";
       import { BOSSA_RENESAS } from "../src/client/config/boardProtocols.js";
 
       function log(msg, cls = "") {
@@ -288,7 +288,7 @@
         // Run Bossa.js and capture commands
         log("Running Bossa.js...", "info");
         const mockPort = new CommandCaptureMock();
-        const bossa = new Bossa(mockPort);
+        const bossa = new BossaProtocol(mockPort);
 
         try {
           await mockPort.open();

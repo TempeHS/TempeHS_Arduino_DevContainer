@@ -9,16 +9,13 @@
     "ms-vscode.cpptools",
     "ms-vscode.cpptools-extension-pack",
     "ms-vscode.cpptools-themes",
-    "ms-vscode.vscode-serial-monitor",
     "oderwat.indent-rainbow",
     "streetsidesoftware.code-spell-checker",
     "tal7aouy.icons",
-    "vscode-arduino.vscode-arduino-community",
     "xaver.clang-format",
     "saeris.markdown-github-alerts",
     "GitHub.copilot",
     "usernamehw.errorlens",
-    "mccarter.start-git-bash",
-    "debanshu2005.code-janitor"
+    "mccarter.start-git-bash"
   ]
 }

@@ -43,6 +43,13 @@
           <select id="sketchSelect">
             <option value="">Select Sketch...</option>
           </select>
+          <label
+            class="checkbox-label"
+            title="Include library example sketches in the dropdown"
+          >
+            <input type="checkbox" id="includeExamplesCheck" />
+            <span>Examples</span>
+          </label>
           <button id="compileBtn" disabled>Compile</button>
           <button id="compileUploadBtn" disabled>Compile & Upload</button>
         </div>
@@ -127,9 +134,258 @@
       </button>
     </div>
 
-    <div id="main-content">
-      <div id="terminal-container"></div>
-      <div id="plotter-container"></div>
+    <!-- Main Navigation Tabs -->
+    <div class="main-nav">
+      <button class="nav-tab active" data-view="serial">
+        <span class="nav-icon">⌨️</span> Serial Monitor
+      </button>
+      <button class="nav-tab" data-view="boards">
+        <span class="nav-icon">🔧</span> Board Manager
+      </button>
+      <button class="nav-tab" data-view="libraries">
+        <span class="nav-icon">📚</span> Library Manager
+      </button>
+      <button class="nav-tab" data-view="reference">
+        <span class="nav-icon">📖</span> Reference
+      </button>
+    </div>
+
+    <!-- Serial Monitor View (Terminal/Plotter) -->
+    <div id="serial-view" class="view-container active">
+      <div id="main-content">
+        <div id="terminal-container"></div>
+        <div id="plotter-container"></div>
+      </div>
+    </div>
+
+    <!-- Board Manager View -->
+    <div id="boards-view" class="view-container">
+      <div class="manager-header">
+        <h2>Board Manager</h2>
+        <div class="manager-controls">
+          <input
+            type="text"
+            id="board-search"
+            placeholder="Search boards and platforms..."
+          />
+          <label class="checkbox-label">
+            <input type="checkbox" id="show-installed-boards" /> Installed only
+          </label>
+          <button id="manage-board-urls" class="secondary-btn">
+            🔗 Additional URLs
+          </button>
+          <button id="refresh-board-index" class="refresh-btn">
+            🔄 Update Index
+          </button>
+        </div>
+        <div class="index-status" id="board-index-status"></div>
+      </div>
+      <div class="manager-list" id="board-list">
+        <div class="loading-placeholder">Loading platforms...</div>
+      </div>
+      <div class="job-progress" id="board-job-progress" style="display: none">
+        <div class="progress-header">
+          <span class="progress-title">Operation in progress...</span>
+          <button class="progress-close" id="close-board-progress">×</button>
+        </div>
+        <pre class="progress-log" id="board-progress-log"></pre>
+      </div>
+
+      <!-- Additional Board URLs Modal -->
+      <div id="board-url-modal" class="modal-overlay" style="display: none">
+        <div class="modal-content url-modal">
+          <div class="modal-header">
+            <h3>Additional Board Manager URLs</h3>
+            <button class="modal-close" id="close-board-url-modal">×</button>
+          </div>
+          <div class="modal-body">
+            <p class="modal-description">
+              Add URLs for third-party board packages (e.g., ESP32, ESP8266,
+              STM32). After adding a URL, click "Update Index" to download the
+              board definitions.
+            </p>
+            <div class="url-input-group">
+              <input
+                type="url"
+                id="board-url-input"
+                placeholder="https://example.com/package_index.json"
+              />
+              <button id="add-board-url" class="btn-install">Add</button>
+            </div>
+            <div class="url-list" id="board-url-list">
+              <div class="empty-urls">Loading...</div>
+            </div>
+            <div class="common-urls">
+              <p class="common-urls-title">Common Board URLs:</p>
+              <ul class="common-urls-list">
+                <li>
+                  <code
+                    >https://raw.githubusercontent.com/espressif/arduino-esp32/gh-pages/package_esp32_index.json</code
+                  >
+                  - ESP32
+                </li>
+                <li>
+                  <code
+                    >https://arduino.esp8266.com/stable/package_esp8266com_index.json</code
+                  >
+                  - ESP8266
+                </li>
+                <li>
+                  <code
+                    >https://adafruit.github.io/arduino-board-index/package_adafruit_index.json</code
+                  >
+                  - Adafruit
+                </li>
+              </ul>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Library Manager View -->
+    <div id="libraries-view" class="view-container">
+      <div class="manager-header">
+        <h2>Library Manager</h2>
+        <div class="manager-controls">
+          <input
+            type="text"
+            id="lib-search"
+            placeholder="Search libraries..."
+          />
+          <select id="lib-category">
+            <option value="All">All Categories</option>
+            <option value="Communication">Communication</option>
+            <option value="Data Processing">Data Processing</option>
+            <option value="Data Storage">Data Storage</option>
+            <option value="Device Control">Device Control</option>
+            <option value="Display">Display</option>
+            <option value="Sensors">Sensors</option>
+            <option value="Signal Input/Output">Signal Input/Output</option>
+            <option value="Timing">Timing</option>
+            <option value="Other">Other</option>
+          </select>
+          <label class="checkbox-label">
+            <input type="checkbox" id="show-installed-libs" /> Installed only
+          </label>
+          <button id="lib-custom-install" class="secondary-btn">
+            📦 Install from URL/ZIP
+          </button>
+          <button id="refresh-lib-index" class="refresh-btn">
+            🔄 Update Index
+          </button>
+        </div>
+        <div class="index-status" id="lib-index-status"></div>
+      </div>
+      <div class="manager-list" id="lib-list">
+        <div class="loading-placeholder">
+          Search for libraries to get started...
+        </div>
+      </div>
+      <div class="job-progress" id="lib-job-progress" style="display: none">
+        <div class="progress-header">
+          <span class="progress-title">Operation in progress...</span>
+          <button class="progress-close" id="close-lib-progress">×</button>
+        </div>
+        <pre class="progress-log" id="lib-progress-log"></pre>
+      </div>
+
+      <!-- Custom Library Install Modal -->
+      <div id="lib-custom-modal" class="modal-overlay" style="display: none">
+        <div class="modal-content custom-install-modal">
+          <div class="modal-header">
+            <h3>Install Library from URL or ZIP</h3>
+            <button class="modal-close" id="close-lib-custom-modal">×</button>
+          </div>
+          <div class="modal-body">
+            <!-- Git URL Section -->
+            <div class="install-section">
+              <h4>Install from Git Repository</h4>
+              <p class="modal-description">
+                Enter a Git repository URL to install the library directly from
+                source.
+              </p>
+              <div class="url-input-group">
+                <input
+                  type="url"
+                  id="lib-git-url"
+                  placeholder="https://github.com/user/library-name.git"
+                />
+                <button id="install-lib-git" class="btn-install">
+                  Install
+                </button>
+              </div>
+              <div class="install-examples">
+                <p class="example-title">Examples:</p>
+                <code>https://github.com/arduino-libraries/Servo.git</code>
+                <code>https://github.com/adafruit/Adafruit_NeoPixel.git</code>
+              </div>
+            </div>
+
+            <div class="install-divider">
+              <span>OR</span>
+            </div>
+
+            <!-- ZIP File Section -->
+            <div class="install-section">
+              <h4>Install from ZIP File</h4>
+              <p class="modal-description">
+                Enter the full path to a downloaded library ZIP file.
+              </p>
+              <div class="url-input-group">
+                <input
+                  type="text"
+                  id="lib-zip-path"
+                  placeholder="/path/to/library.zip"
+                />
+                <button id="install-lib-zip" class="btn-install">
+                  Install
+                </button>
+              </div>
+              <div class="install-examples">
+                <p class="example-title">Example paths:</p>
+                <code>/home/user/Downloads/MyLibrary.zip</code>
+                <code>/workspaces/project/libs/CustomLib.zip</code>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Reference View -->
+    <div id="reference-view" class="view-container">
+      <div class="manager-header">
+        <h2>Arduino Language Reference</h2>
+        <div class="manager-controls">
+          <input
+            type="text"
+            id="ref-search"
+            placeholder="Search functions, variables..."
+          />
+          <select id="ref-category">
+            <option value="all">All Categories</option>
+            <option value="digital">Digital I/O</option>
+            <option value="analog">Analog I/O</option>
+            <option value="time">Time</option>
+            <option value="math">Math</option>
+            <option value="serial">Serial</option>
+            <option value="variables">Variables</option>
+            <option value="structure">Structure</option>
+          </select>
+          <button id="refresh-reference" class="refresh-btn">🔄 Refresh</button>
+          <a
+            href="https://docs.arduino.cc/language-reference/"
+            target="_blank"
+            class="secondary-btn"
+          >
+            🔗 Full Docs
+          </a>
+        </div>
+      </div>
+      <div class="reference-content" id="reference-content">
+        <div class="loading-placeholder">Loading Arduino reference...</div>
+      </div>
     </div>
 
     <div class="input-bar">
